@@ -2,7 +2,7 @@ import discord
 import json
 import logging
 
-from core import Plugin, utils, Server, Status, Group
+from core import Plugin, utils, Server, Status, Group, get_translation
 from datetime import datetime, timezone
 from discord import app_commands
 from psycopg.rows import dict_row
@@ -12,6 +12,7 @@ from typing import Literal, Optional
 from .listener import LogisticsEventListener
 
 log = logging.getLogger(__name__)
+_ = get_translation(__name__.split('.')[1])
 
 
 # ==================== AUTOCOMPLETE FUNCTIONS ====================
@@ -77,22 +78,22 @@ class Logistics(Plugin[LogisticsEventListener]):
     """
 
     # Command group "/logistics"
-    logistics = Group(name="logistics", description="Logistics mission management")
+    logistics = Group(name="logistics", description=_("Logistics mission management"))
 
     # Command group "/warehouse"
-    warehouse = Group(name="warehouse", description="Warehouse inventory commands")
+    warehouse = Group(name="warehouse", description=_("Warehouse inventory commands"))
 
     # ==================== LOGISTICS COMMANDS ====================
 
-    @logistics.command(description='Create a new logistics task')
+    @logistics.command(description=_('Create a new logistics task'))
     @app_commands.guild_only()
-    @utils.app_has_roles(['DCS Admin', 'Logistics Officer'])
+    @utils.app_has_role('DCS')
     @app_commands.rename(source_idx='source', dest_idx='destination')
-    @app_commands.describe(source_idx='Pickup location (airbase/FARP/carrier)')
-    @app_commands.describe(dest_idx='Delivery location')
+    @app_commands.describe(source_idx=_('Pickup location (airbase/FARP/carrier)'))
+    @app_commands.describe(dest_idx=_('Delivery location'))
     @app_commands.autocomplete(source_idx=utils.airbase_autocomplete, dest_idx=utils.airbase_autocomplete)
     async def create(self, interaction: discord.Interaction,
-                     server: app_commands.Transform[Server, utils.ServerTransformer(status=[Status.RUNNING])],
+                     server: app_commands.Transform[Server, utils.ServerTransformer],
                      source_idx: int,
                      dest_idx: int,
                      cargo: str,
@@ -118,14 +119,14 @@ class Logistics(Plugin[LogisticsEventListener]):
 
         # Get airbase names from indices
         if not server.current_mission or not server.current_mission.airbases:
-            await interaction.followup.send("Server has no mission loaded or no airbases available.", ephemeral=True)
+            await interaction.followup.send(_("Server has no mission loaded or no airbases available."), ephemeral=True)
             return
 
         try:
             source_airbase = server.current_mission.airbases[source_idx]
             dest_airbase = server.current_mission.airbases[dest_idx]
         except IndexError:
-            await interaction.followup.send("Invalid airbase selection.", ephemeral=True)
+            await interaction.followup.send(_("Invalid airbase selection."), ephemeral=True)
             return
 
         source = source_airbase['name']
@@ -149,7 +150,7 @@ class Logistics(Plugin[LogisticsEventListener]):
                     from datetime import timedelta
                     deadline_dt += timedelta(days=1)
             except ValueError:
-                await interaction.followup.send("Invalid deadline format. Use HH:MM (UTC).", ephemeral=True)
+                await interaction.followup.send(_("Invalid deadline format. Use HH:MM (UTC)."), ephemeral=True)
                 return
 
         async with self.apool.connection() as conn:
@@ -163,7 +164,7 @@ class Logistics(Plugin[LogisticsEventListener]):
                 RETURNING id
             """, (
                 server.name,
-                'ADMIN',  # Created by admin, not player UCID
+                None,  # NULL for admin-created tasks (no player UCID)
                 priority,
                 cargo,
                 source,
@@ -186,19 +187,25 @@ class Logistics(Plugin[LogisticsEventListener]):
                 VALUES (%s, 'created', %s, %s)
             """, (task_id, interaction.user.id, '{"source": "discord_admin", "auto_approved": true}'))
 
-        # Create markers
-        if source_position and dest_position:
-            await self.eventlistener._create_markers_for_task(server, {
-                'id': task_id,
-                'cargo_type': cargo,
-                'source_name': source,
-                'source_position': source_position,
-                'destination_name': destination,
-                'destination_position': dest_position,
-                'coalition': coalition_id,
-                'deadline': deadline_dt,
-                'assigned_name': None
-            })
+            # Publish to status channel if configured
+            config = self.get_config(server)
+            if config.get('publish_on_create', True):
+                task_data = {
+                    'id': task_id,
+                    'server_name': server.name,
+                    'cargo_type': cargo,
+                    'source_name': source,
+                    'destination_name': destination,
+                    'priority': priority,
+                    'coalition': coalition_id,
+                    'deadline': deadline_dt,
+                    'status': 'approved',
+                    'created_at': now,
+                    'discord_message_id': None
+                }
+                await self.eventlistener.publish_logistics_task(task_data, 'approved')
+
+        # Markers are created when a player accepts the task or uses -plot command
 
         embed = discord.Embed(
             title="Logistics Task Created",
@@ -215,7 +222,7 @@ class Logistics(Plugin[LogisticsEventListener]):
 
         await interaction.followup.send(embed=embed, ephemeral=ephemeral)
 
-    @logistics.command(description='List logistics tasks')
+    @logistics.command(description=_('List logistics tasks'))
     @app_commands.guild_only()
     @utils.app_has_role('DCS')
     async def list(self, interaction: discord.Interaction,
@@ -261,7 +268,7 @@ class Logistics(Plugin[LogisticsEventListener]):
             tasks = await cursor.fetchall()
 
         if not tasks:
-            await interaction.followup.send("No logistics tasks found.", ephemeral=ephemeral)
+            await interaction.followup.send(_("No logistics tasks found."), ephemeral=ephemeral)
             return
 
         embed = discord.Embed(
@@ -291,7 +298,7 @@ class Logistics(Plugin[LogisticsEventListener]):
 
         await interaction.followup.send(embed=embed, ephemeral=ephemeral)
 
-    @logistics.command(description='View details of a logistics task')
+    @logistics.command(description=_('View details of a logistics task'))
     @app_commands.guild_only()
     @utils.app_has_role('DCS')
     @app_commands.autocomplete(task_id=logistics_task_autocomplete)
@@ -313,7 +320,7 @@ class Logistics(Plugin[LogisticsEventListener]):
                 task = await cursor.fetchone()
 
                 if not task:
-                    await interaction.followup.send(f"Task #{task_id} not found.", ephemeral=True)
+                    await interaction.followup.send(_("Task #{} not found.").format(task_id), ephemeral=True)
                     return
 
                 # Get history
@@ -367,9 +374,9 @@ class Logistics(Plugin[LogisticsEventListener]):
 
         await interaction.followup.send(embed=embed, ephemeral=ephemeral)
 
-    @logistics.command(description='Approve a pending logistics request')
+    @logistics.command(description=_('Approve a pending logistics request'))
     @app_commands.guild_only()
-    @utils.app_has_roles(['DCS Admin', 'Logistics Officer'])
+    @utils.app_has_role('DCS')
     @app_commands.autocomplete(task_id=pending_task_autocomplete)
     async def approve(self, interaction: discord.Interaction,
                       task_id: int,
@@ -398,17 +405,17 @@ class Logistics(Plugin[LogisticsEventListener]):
             task = await cursor.fetchone()
 
             if not task:
-                await interaction.followup.send(f"Task #{task_id} not found.", ephemeral=True)
+                await interaction.followup.send(_("Task #{} not found.").format(task_id), ephemeral=True)
                 return
 
             if task[1] != 'pending':
-                await interaction.followup.send(f"Task #{task_id} is not pending (status: {task[1]}).", ephemeral=True)
+                await interaction.followup.send(_("Task #{} is not pending (status: {}).").format(task_id, task[1]), ephemeral=True)
                 return
 
             # Update source if provided
             final_source = source if source else task[2]
             if final_source == 'TBD':
-                await interaction.followup.send("Please specify a source location for this task.", ephemeral=True)
+                await interaction.followup.send(_("Please specify a source location for this task."), ephemeral=True)
                 return
 
             now = datetime.now(timezone.utc)
@@ -466,9 +473,9 @@ class Logistics(Plugin[LogisticsEventListener]):
 
         await interaction.followup.send(embed=embed, ephemeral=ephemeral)
 
-    @logistics.command(description='Deny a pending logistics request')
+    @logistics.command(description=_('Deny a pending logistics request'))
     @app_commands.guild_only()
-    @utils.app_has_roles(['DCS Admin', 'Logistics Officer'])
+    @utils.app_has_role('DCS')
     @app_commands.autocomplete(task_id=pending_task_autocomplete)
     async def deny(self, interaction: discord.Interaction,
                    task_id: int,
@@ -495,7 +502,7 @@ class Logistics(Plugin[LogisticsEventListener]):
             """, (f"Denied: {reason}", now, task_id))
 
             if result.rowcount == 0:
-                await interaction.followup.send(f"Task #{task_id} not found or not pending.", ephemeral=True)
+                await interaction.followup.send(_("Task #{} not found or not pending.").format(task_id), ephemeral=True)
                 return
 
             await conn.execute("""
@@ -503,11 +510,11 @@ class Logistics(Plugin[LogisticsEventListener]):
                 VALUES (%s, 'denied', %s, %s)
             """, (task_id, interaction.user.id, f'{{"reason": "{reason}"}}'))
 
-        await interaction.followup.send(f"Task #{task_id} has been denied.", ephemeral=ephemeral)
+        await interaction.followup.send(_("Task #{} has been denied.").format(task_id), ephemeral=ephemeral)
 
-    @logistics.command(description='Cancel an active logistics task')
+    @logistics.command(description=_('Cancel an active logistics task'))
     @app_commands.guild_only()
-    @utils.app_has_roles(['DCS Admin'])
+    @utils.app_has_role('DCS')
     @app_commands.autocomplete(task_id=logistics_task_autocomplete)
     async def cancel(self, interaction: discord.Interaction,
                      task_id: int,
@@ -525,14 +532,16 @@ class Logistics(Plugin[LogisticsEventListener]):
         await interaction.response.defer(ephemeral=ephemeral)
 
         async with self.apool.connection() as conn:
-            # Get task for server info
+            # Get task for server info and publishing
             cursor = await conn.execute("""
-                SELECT server_name FROM logistics_tasks WHERE id = %s AND status != 'completed'
+                SELECT server_name, cargo_type, source_name, destination_name, priority,
+                       coalition, deadline, created_at, discord_message_id
+                FROM logistics_tasks WHERE id = %s AND status != 'completed'
             """, (task_id,))
             task = await cursor.fetchone()
 
             if not task:
-                await interaction.followup.send(f"Task #{task_id} not found or already completed.", ephemeral=True)
+                await interaction.followup.send(_("Task #{} not found or already completed.").format(task_id), ephemeral=True)
                 return
 
             now = datetime.now(timezone.utc)
@@ -553,15 +562,32 @@ class Logistics(Plugin[LogisticsEventListener]):
         if server:
             await self.eventlistener._remove_task_markers(server, task_id)
 
-        await interaction.followup.send(f"Task #{task_id} has been cancelled.", ephemeral=ephemeral)
+            # Publish cancellation to status channel
+            config = self.get_config(server)
+            if config.get('publish_on_cancel', True):
+                await self.eventlistener.publish_logistics_task({
+                    'id': task_id,
+                    'cargo_type': task[1],
+                    'source_name': task[2],
+                    'destination_name': task[3],
+                    'priority': task[4],
+                    'coalition': task[5],
+                    'deadline': task[6],
+                    'created_at': task[7],
+                    'notes': f"Cancelled: {reason or 'No reason given'}",
+                    'server_name': task[0],
+                    'discord_message_id': task[8]
+                }, 'cancelled')
+
+        await interaction.followup.send(_("Task #{} has been cancelled.").format(task_id), ephemeral=ephemeral)
 
     # ==================== WAREHOUSE COMMANDS ====================
 
-    @warehouse.command(description='Query warehouse inventory at a location')
+    @warehouse.command(description=_('Query warehouse inventory at a location'))
     @app_commands.guild_only()
     @utils.app_has_role('DCS')
     @app_commands.rename(airbase_idx='airbase')
-    @app_commands.describe(airbase_idx='Airbase or carrier to query')
+    @app_commands.describe(airbase_idx=_('Airbase or carrier to query'))
     @app_commands.autocomplete(airbase_idx=utils.airbase_autocomplete)
     async def status(self, interaction: discord.Interaction,
                      server: app_commands.Transform[Server, utils.ServerTransformer(status=[Status.RUNNING])],
@@ -582,14 +608,14 @@ class Logistics(Plugin[LogisticsEventListener]):
 
         # Get airbase name from index
         if not server.current_mission or not server.current_mission.airbases:
-            await interaction.followup.send("Server has no mission loaded or no airbases available.", ephemeral=True)
+            await interaction.followup.send(_("Server has no mission loaded or no airbases available."), ephemeral=True)
             return
 
         try:
             airbase_data = server.current_mission.airbases[airbase_idx]
             airbase = airbase_data['name']
         except IndexError:
-            await interaction.followup.send("Invalid airbase selection.", ephemeral=True)
+            await interaction.followup.send(_("Invalid airbase selection."), ephemeral=True)
             return
 
         try:
@@ -598,11 +624,11 @@ class Logistics(Plugin[LogisticsEventListener]):
                 "name": airbase
             }, timeout=60)
         except Exception as e:
-            await interaction.followup.send(f"Failed to query warehouse: {e}", ephemeral=True)
+            await interaction.followup.send(_("Failed to query warehouse: {}").format(e), ephemeral=True)
             return
 
         if not data or 'warehouse' not in data:
-            await interaction.followup.send(f"No warehouse data for {airbase}.", ephemeral=True)
+            await interaction.followup.send(_("No warehouse data for {}.").format(airbase), ephemeral=True)
             return
 
         warehouse = data['warehouse']
@@ -661,12 +687,12 @@ class Logistics(Plugin[LogisticsEventListener]):
 
         await interaction.followup.send(embed=embed, ephemeral=ephemeral)
 
-    @warehouse.command(description='Compare inventory between two locations')
+    @warehouse.command(description=_('Compare inventory between two locations'))
     @app_commands.guild_only()
     @utils.app_has_role('DCS')
     @app_commands.rename(source_idx='source', dest_idx='destination')
-    @app_commands.describe(source_idx='First location to compare')
-    @app_commands.describe(dest_idx='Second location to compare')
+    @app_commands.describe(source_idx=_('First location to compare'))
+    @app_commands.describe(dest_idx=_('Second location to compare'))
     @app_commands.autocomplete(source_idx=utils.airbase_autocomplete, dest_idx=utils.airbase_autocomplete)
     async def compare(self, interaction: discord.Interaction,
                       server: app_commands.Transform[Server, utils.ServerTransformer(status=[Status.RUNNING])],
@@ -687,14 +713,14 @@ class Logistics(Plugin[LogisticsEventListener]):
 
         # Get airbase names from indices
         if not server.current_mission or not server.current_mission.airbases:
-            await interaction.followup.send("Server has no mission loaded or no airbases available.", ephemeral=True)
+            await interaction.followup.send(_("Server has no mission loaded or no airbases available."), ephemeral=True)
             return
 
         try:
             source = server.current_mission.airbases[source_idx]['name']
             destination = server.current_mission.airbases[dest_idx]['name']
         except IndexError:
-            await interaction.followup.send("Invalid airbase selection.", ephemeral=True)
+            await interaction.followup.send(_("Invalid airbase selection."), ephemeral=True)
             return
 
         try:
@@ -707,7 +733,7 @@ class Logistics(Plugin[LogisticsEventListener]):
                 "name": destination
             }, timeout=60)
         except Exception as e:
-            await interaction.followup.send(f"Failed to query warehouses: {e}", ephemeral=True)
+            await interaction.followup.send(_("Failed to query warehouses: {}").format(e), ephemeral=True)
             return
 
         embed = discord.Embed(
