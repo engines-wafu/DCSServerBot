@@ -250,12 +250,13 @@ local NAV_FIX_COLOR = {0, 0.8, 0, 0.8}  -- R, G, B, A
 --   fixes_json: JSON array of {name, type, x, z, frequency}
 --   channel: response channel
 function dcsbot.showNavFixes(player_ucid, coalitionNum, fixes_json, channel)
-    env.info('DCSServerBot - FlightPlan: showNavFixes(' .. player_ucid .. ')')
+    env.info('DCSServerBot - FlightPlan: showNavFixes(' .. player_ucid .. ', coalition=' .. tostring(coalitionNum) .. ')')
 
     -- Remove any existing markers for this player first
     dcsbot.hideNavFixesInternal(player_ucid)
 
     local coal = getCoalition(coalitionNum)
+    env.info('DCSServerBot - FlightPlan: showNavFixes - coal=' .. tostring(coal))
     local markers = {}
 
     -- Parse fixes JSON
@@ -263,8 +264,10 @@ function dcsbot.showNavFixes(player_ucid, coalitionNum, fixes_json, channel)
     if fixes_json and fixes_json ~= "" and fixes_json ~= "[]" then
         fixes = net.json2lua(fixes_json) or {}
     end
+    env.info('DCSServerBot - FlightPlan: showNavFixes - parsed ' .. #fixes .. ' fixes')
 
     -- Create markers for each fix
+    local created = 0
     for _, fix in ipairs(fixes) do
         if fix.x and fix.z then
             local markerId = getNextNavFixMarkerId()
@@ -278,8 +281,15 @@ function dcsbot.showNavFixes(player_ucid, coalitionNum, fixes_json, channel)
 
             trigger.action.markToCoalition(markerId, markerText, pos, coal, false)
             table.insert(markers, {id = markerId, name = fix.name, type = fix.type})
+            created = created + 1
+
+            -- Log first few markers for debugging
+            if created <= 3 then
+                env.info('DCSServerBot - FlightPlan: Created marker ' .. markerId .. ' at x=' .. fix.x .. ' z=' .. fix.z .. ' for ' .. (fix.name or 'Unknown'))
+            end
         end
     end
+    env.info('DCSServerBot - FlightPlan: showNavFixes - created ' .. created .. ' markers')
 
     -- Store markers for later removal
     dcsbot.navFixMarkers[player_ucid] = {
