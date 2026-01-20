@@ -274,9 +274,21 @@ function dcsbot.showNavFixes(player_ucid, coalitionNum, fixes_json, channel)
     -- Create markers for each fix
     local created = 0
     for _, fix in ipairs(fixes) do
-        if fix.x and fix.z then
+        local x = fix.x
+        local z = fix.z
+
+        -- If no DCS coordinates, convert from lat/lon
+        if (not x or not z) and fix.lat and fix.lon then
+            local converted = coord.LLtoLO(fix.lat, fix.lon, 0)
+            if converted then
+                x = converted.x
+                z = converted.z
+            end
+        end
+
+        if x and z then
             local markerId = getNextNavFixMarkerId()
-            local pos = {x = fix.x, y = 0, z = fix.z}
+            local pos = {x = x, y = 0, z = z}
 
             -- Build marker text: [{type}] {name} with optional frequency
             local markerText = "[" .. (fix.type or "FIX") .. "] " .. (fix.name or "Unknown")
@@ -290,7 +302,7 @@ function dcsbot.showNavFixes(player_ucid, coalitionNum, fixes_json, channel)
 
             -- Log first few markers for debugging
             if created <= 3 then
-                env.info('DCSServerBot - FlightPlan: Created marker ' .. markerId .. ' at x=' .. fix.x .. ' z=' .. fix.z .. ' for ' .. (fix.name or 'Unknown'))
+                env.info('DCSServerBot - FlightPlan: Created marker ' .. markerId .. ' at x=' .. tostring(x) .. ' z=' .. tostring(z) .. ' for ' .. (fix.name or 'Unknown'))
             end
         end
     end

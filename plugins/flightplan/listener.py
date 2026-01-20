@@ -728,12 +728,14 @@ class FlightPlanEventListener(EventListener["FlightPlan"]):
         """Send nav fixes to Lua for F10 display."""
         fixes_data = []
         for fix in fixes:
-            # Use stored DCS coordinates if available
+            # Use stored DCS coordinates if available, otherwise send lat/lon for conversion
             x = fix.get('position_x')
             z = fix.get('position_z')
+            lat = fix.get('latitude')
+            lon = fix.get('longitude')
 
-            if x is None or z is None:
-                # Skip fixes without coordinates (would need conversion)
+            # Must have either DCS coords or lat/lon
+            if (x is None or z is None) and (lat is None or lon is None):
                 continue
 
             fixes_data.append({
@@ -741,6 +743,8 @@ class FlightPlanEventListener(EventListener["FlightPlan"]):
                 'type': fix['fix_type'],
                 'x': x,
                 'z': z,
+                'lat': lat,
+                'lon': lon,
                 'frequency': fix.get('frequency')
             })
 
