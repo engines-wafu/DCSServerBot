@@ -357,40 +357,45 @@ class LogisticsEventListener(EventListener["Logistics"]):
     async def _assign_task(self, server: Server, player: Player, task_id: int) -> dict:
         """Assign a task to a player."""
         async with self.apool.connection() as conn:
-            # Check if task is available
-            cursor = await conn.execute("""
-                SELECT id, cargo_type, source_name, destination_name, deadline, coalition
-                FROM logistics_tasks
-                WHERE id = %s AND server_name = %s AND status = 'approved'
-            """, (task_id, server.name))
-            task = await cursor.fetchone()
+            async with conn.transaction():
+                # Check if task is available with row lock to prevent race conditions
+                cursor = await conn.execute("""
+                    SELECT id, cargo_type, source_name, destination_name, deadline, coalition
+                    FROM logistics_tasks
+                    WHERE id = %s AND server_name = %s AND status = 'approved'
+                    FOR UPDATE
+                """, (task_id, server.name))
+                task = await cursor.fetchone()
 
-            if not task:
-                return {'success': False, 'error': 'Task not found or not available'}
+                if not task:
+                    return {'success': False, 'error': 'Task not found or not available'}
 
-            if task[5] != player.coalition:
-                return {'success': False, 'error': 'Task is for a different coalition'}
+                if task[5] != player.coalition:
+                    return {'success': False, 'error': 'Task is for a different coalition'}
 
-            # Check if player already has a task
-            existing = await self._get_assigned_task(player.ucid, server.name)
-            if existing:
-                return {'success': False, 'error': f'You already have task #{existing["id"]} assigned'}
+                # Check if player already has a task
+                existing = await self._get_assigned_task(player.ucid, server.name)
+                if existing:
+                    return {'success': False, 'error': f'You already have task #{existing["id"]} assigned'}
 
-            # Assign the task
-            now = datetime.now(timezone.utc)
-            await conn.execute("""
-                UPDATE logistics_tasks
-                SET assigned_ucid = %s, assigned_at = %s, status = 'assigned', updated_at = %s
-                WHERE id = %s
-            """, (player.ucid, now, now, task_id))
+                # Assign the task - include status check in WHERE to ensure atomicity
+                now = datetime.now(timezone.utc)
+                result = await conn.execute("""
+                    UPDATE logistics_tasks
+                    SET assigned_ucid = %s, assigned_at = %s, status = 'assigned', updated_at = %s
+                    WHERE id = %s AND status = 'approved'
+                """, (player.ucid, now, now, task_id))
 
-            # Record history
-            await conn.execute("""
-                INSERT INTO logistics_tasks_history (task_id, event, actor_ucid, details)
-                VALUES (%s, 'assigned', %s, %s)
-            """, (task_id, player.ucid, '{"action": "player_accepted"}'))
+                if result.rowcount == 0:
+                    return {'success': False, 'error': 'Task was claimed by another player'}
 
-            # Update markers with pilot name
+                # Record history
+                await conn.execute("""
+                    INSERT INTO logistics_tasks_history (task_id, event, actor_ucid, details)
+                    VALUES (%s, 'assigned', %s, %s)
+                """, (task_id, player.ucid, '{"action": "player_accepted"}'))
+
+            # Update markers with pilot name (outside transaction as it's not critical)
             await self._update_markers_with_pilot(server, task_id, player.name)
 
             return {
