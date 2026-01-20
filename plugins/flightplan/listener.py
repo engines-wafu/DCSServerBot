@@ -359,6 +359,17 @@ class FlightPlanEventListener(EventListener["FlightPlan"]):
         # Create F10 menu for the player
         await self._create_flightplan_menu(server, player)
 
+    @event(name="onPlayerDisconnect")
+    async def on_player_disconnect(self, server: Server, data: dict) -> None:
+        """Clean up nav fix markers when player disconnects."""
+        ucid = data.get('ucid')
+        if ucid and hasattr(self, '_player_nav_fixes') and ucid in self._player_nav_fixes:
+            del self._player_nav_fixes[ucid]
+            await server.send_to_dcs({
+                'command': 'hideNavFixes',
+                'player_ucid': ucid
+            })
+
     @event(name="flightplan")
     async def on_flightplan_callback(self, server: Server, data: dict) -> None:
         """Handle F10 menu callbacks for flight plans."""
@@ -646,6 +657,114 @@ class FlightPlanEventListener(EventListener["FlightPlan"]):
         await self.publish_flight_plan(fp, 'cancelled')
 
         await player.sendChatMessage(_("Flight plan #{} cancelled.").format(fp['id']))
+
+    @chat_command(name="navfixes", aliases=["nf"], help=_("Toggle navigation fixes on F10 map: -navfixes on|off [VOR|NDB|TACAN|WYP]"))
+    async def cmd_navfixes(self, server: Server, player: Player, params: list[str]) -> None:
+        """Toggle navigation fix display on F10 map for this player."""
+        if not params:
+            await player.sendChatMessage(_("Usage: -navfixes on|off [VOR|NDB|TACAN|WYP]"))
+            return
+
+        action = params[0].lower()
+        fix_type = params[1].upper() if len(params) > 1 else None
+
+        if action == "off":
+            await self._hide_player_nav_fixes(server, player)
+            await player.sendChatMessage(_("Navigation fixes hidden."))
+            return
+
+        if action != "on":
+            await player.sendChatMessage(_("Usage: -navfixes on|off [type]"))
+            return
+
+        # Get current theater
+        theater = server.current_mission.map if server.current_mission else None
+        if not theater:
+            await player.sendChatMessage(_("Cannot determine current map theater."))
+            return
+
+        # Normalize theater name
+        from .commands import get_theater_name
+        theater = get_theater_name(theater)
+
+        # Query fixes from database
+        fixes = await self._get_nav_fixes_for_theater(theater, fix_type)
+
+        if not fixes:
+            type_msg = f" of type {fix_type}" if fix_type else ""
+            await player.sendChatMessage(_("No navigation fixes{} found for {}.").format(type_msg, theater))
+            return
+
+        # Convert and send to Lua
+        await self._show_player_nav_fixes(server, player, fixes)
+        type_msg = f" {fix_type}" if fix_type else ""
+        await player.sendChatMessage(_("Showing {}{} navigation fixes on F10 map.").format(len(fixes), type_msg))
+
+    # ==================== NAV FIXES HELPER METHODS ====================
+
+    async def _get_nav_fixes_for_theater(self, theater: str, fix_type: Optional[str] = None) -> list[dict]:
+        """Query navigation fixes from database for a theater."""
+        async with self.apool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                if fix_type and fix_type != "ALL":
+                    await cursor.execute("""
+                        SELECT identifier, fix_type, latitude, longitude,
+                               position_x, position_z, frequency
+                        FROM flightplan_navigation_fixes
+                        WHERE map_theater = %s AND fix_type = %s
+                        ORDER BY identifier
+                    """, (theater, fix_type))
+                else:
+                    await cursor.execute("""
+                        SELECT identifier, fix_type, latitude, longitude,
+                               position_x, position_z, frequency
+                        FROM flightplan_navigation_fixes
+                        WHERE map_theater = %s
+                        ORDER BY identifier
+                    """, (theater,))
+                return await cursor.fetchall()
+
+    async def _show_player_nav_fixes(self, server: Server, player: Player, fixes: list[dict]) -> None:
+        """Send nav fixes to Lua for F10 display."""
+        fixes_data = []
+        for fix in fixes:
+            # Use stored DCS coordinates if available
+            x = fix.get('position_x')
+            z = fix.get('position_z')
+
+            if x is None or z is None:
+                # Skip fixes without coordinates (would need conversion)
+                continue
+
+            fixes_data.append({
+                'name': fix['identifier'],
+                'type': fix['fix_type'],
+                'x': x,
+                'z': z,
+                'frequency': fix.get('frequency')
+            })
+
+        # Track that this player has fixes shown
+        if not hasattr(self, '_player_nav_fixes'):
+            self._player_nav_fixes = {}
+        self._player_nav_fixes[player.ucid] = True
+
+        await server.send_to_dcs({
+            'command': 'showNavFixes',
+            'player_ucid': player.ucid,
+            'coalition': player.side.value if player.side else 0,
+            'fixes_json': json.dumps(fixes_data)
+        })
+
+    async def _hide_player_nav_fixes(self, server: Server, player: Player) -> None:
+        """Remove nav fixes from F10 map for a player."""
+        if hasattr(self, '_player_nav_fixes'):
+            self._player_nav_fixes.pop(player.ucid, None)
+
+        await server.send_to_dcs({
+            'command': 'hideNavFixes',
+            'player_ucid': player.ucid
+        })
 
     # ==================== F10 MENU METHODS ====================
 

@@ -8,6 +8,7 @@
 # - Discord status channel for flight visibility             #
 # - OpenAIP integration for navigation fixes                 #
 # - Auto-cancel stale flight plans                           #
+# - F10 navigation fix display toggle                        #
 ##############################################################
 DEFAULT: # valid for all servers
   # OPTIONAL: Discord channel ID for flight plan status board
@@ -29,6 +30,16 @@ DEFAULT: # valid for all servers
   openaip:
     api_key: YOUR_API_KEY_HERE  # Free registration at openaip.net
     cache_hours: 168            # Hours to cache API results (default: 168 = 7 days)
+
+  # OPTIONAL: Navigation fix display settings
+  # Pilots can toggle nav fixes on F10 map using -navfixes on|off [VOR|NDB|TACAN|WYP]
+  nav_fixes:
+    max_markers: 500          # Maximum markers per player (safety limit, default: 500)
+    default_types:            # Types shown by default with '-navfixes on' (default: all)
+      - VOR
+      - NDB
+      - TACAN
+      - WYP
 
 DCS.release_server: # valid for a specific server
   status_channel: 1462892734468722872

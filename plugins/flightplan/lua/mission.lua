@@ -225,4 +225,141 @@ function dcsbot.removeFlightPlanMarkers(plan_id, channel)
     end
 end
 
+-----------------------------------------------------
+-- Navigation Fix Markers
+-----------------------------------------------------
+
+-- Storage for nav fix markers by player UCID
+dcsbot.navFixMarkers = dcsbot.navFixMarkers or {}
+
+-- Marker ID counter for nav fixes (start at 30000 to avoid collision with flightplan markers at 20000)
+dcsbot.navFixMarkerCounter = dcsbot.navFixMarkerCounter or 30000
+
+local function getNextNavFixMarkerId()
+    dcsbot.navFixMarkerCounter = dcsbot.navFixMarkerCounter + 1
+    return dcsbot.navFixMarkerCounter
+end
+
+-- Nav fix marker color: Green (distinct from cyan flight plans and yellow logistics)
+local NAV_FIX_COLOR = {0, 0.8, 0, 0.8}  -- R, G, B, A
+
+-- Show navigation fixes on the F10 map
+-- Parameters:
+--   player_ucid: unique player identifier
+--   coalitionNum: 0=ALL, 1=RED, 2=BLUE
+--   fixes_json: JSON array of {name, type, x, z, frequency}
+--   channel: response channel
+function dcsbot.showNavFixes(player_ucid, coalitionNum, fixes_json, channel)
+    env.info('DCSServerBot - FlightPlan: showNavFixes(' .. player_ucid .. ')')
+
+    -- Remove any existing markers for this player first
+    dcsbot.hideNavFixesInternal(player_ucid)
+
+    local coal = getCoalition(coalitionNum)
+    local markers = {}
+
+    -- Parse fixes JSON
+    local fixes = {}
+    if fixes_json and fixes_json ~= "" and fixes_json ~= "[]" then
+        fixes = net.json2lua(fixes_json) or {}
+    end
+
+    -- Create markers for each fix
+    for _, fix in ipairs(fixes) do
+        if fix.x and fix.z then
+            local markerId = getNextNavFixMarkerId()
+            local pos = {x = fix.x, y = 0, z = fix.z}
+
+            -- Build marker text: [{type}] {name} with optional frequency
+            local markerText = "[" .. (fix.type or "FIX") .. "] " .. (fix.name or "Unknown")
+            if fix.frequency and fix.frequency ~= "" then
+                markerText = markerText .. "\n" .. fix.frequency
+            end
+
+            trigger.action.markToCoalition(markerId, markerText, pos, coal, false)
+            table.insert(markers, {id = markerId, name = fix.name, type = fix.type})
+        end
+    end
+
+    -- Store markers for later removal
+    dcsbot.navFixMarkers[player_ucid] = {
+        markers = markers,
+        coalition = coalitionNum
+    }
+
+    -- Send confirmation back to bot (only if channel is valid)
+    if channel and channel ~= "-1" then
+        local msg = {
+            command = "showNavFixes",
+            player_ucid = player_ucid,
+            marker_count = #markers
+        }
+        dcsbot.sendBotTable(msg, channel)
+    end
+end
+
+-- Internal function to remove nav fix markers without sending response
+function dcsbot.hideNavFixesInternal(player_ucid)
+    local playerMarkers = dcsbot.navFixMarkers[player_ucid]
+    if playerMarkers and playerMarkers.markers then
+        for _, marker in ipairs(playerMarkers.markers) do
+            trigger.action.removeMark(marker.id)
+        end
+        dcsbot.navFixMarkers[player_ucid] = nil
+    end
+end
+
+-- Hide navigation fixes for a player
+-- Parameters:
+--   player_ucid: unique player identifier
+--   channel: response channel
+function dcsbot.hideNavFixes(player_ucid, channel)
+    env.info('DCSServerBot - FlightPlan: hideNavFixes(' .. player_ucid .. ')')
+
+    local count = 0
+    local playerMarkers = dcsbot.navFixMarkers[player_ucid]
+    if playerMarkers and playerMarkers.markers then
+        count = #playerMarkers.markers
+    end
+
+    dcsbot.hideNavFixesInternal(player_ucid)
+
+    -- Send confirmation back to bot (only if channel is valid)
+    if channel and channel ~= "-1" then
+        local msg = {
+            command = "hideNavFixes",
+            player_ucid = player_ucid,
+            removed_count = count
+        }
+        dcsbot.sendBotTable(msg, channel)
+    end
+end
+
+-- Hide all navigation fixes (server-wide)
+-- Parameters:
+--   channel: response channel
+function dcsbot.hideAllNavFixes(channel)
+    env.info('DCSServerBot - FlightPlan: hideAllNavFixes()')
+
+    local total_count = 0
+
+    -- Iterate through all players with nav fix markers and remove them
+    for player_ucid, _ in pairs(dcsbot.navFixMarkers) do
+        local playerMarkers = dcsbot.navFixMarkers[player_ucid]
+        if playerMarkers and playerMarkers.markers then
+            total_count = total_count + #playerMarkers.markers
+        end
+        dcsbot.hideNavFixesInternal(player_ucid)
+    end
+
+    -- Send confirmation back to bot (only if channel is valid)
+    if channel and channel ~= "-1" then
+        local msg = {
+            command = "hideAllNavFixes",
+            removed_count = total_count
+        }
+        dcsbot.sendBotTable(msg, channel)
+    end
+end
+
 env.info("DCSServerBot - FlightPlan: mission.lua loaded.")

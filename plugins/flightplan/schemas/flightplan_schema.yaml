@@ -5,6 +5,17 @@ schema;openaip_schema:
     api_key: {type: str, nullable: true}
     cache_hours: {type: int, nullable: true}
 
+schema;nav_fixes_schema:
+  type: map
+  nullable: true
+  mapping:
+    max_markers: {type: int, nullable: true}
+    default_types:
+      type: seq
+      nullable: true
+      sequence:
+        - type: str
+
 schema;element_schema:
   type: map
   func: is_element
@@ -19,6 +30,8 @@ schema;element_schema:
     marker_timeout: {type: int, nullable: true}
     openaip:
       include: 'openaip_schema'
+    nav_fixes:
+      include: 'nav_fixes_schema'
 
 type: map
 func: check_main_structure

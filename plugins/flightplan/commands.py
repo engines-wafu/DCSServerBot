@@ -1014,6 +1014,124 @@ class FlightPlan(Plugin[FlightPlanEventListener]):
 
         await interaction.followup.send(embed=embed, ephemeral=ephemeral)
 
+    @flightplan.command(name='fixes')
+    @app_commands.guild_only()
+    @app_commands.describe(
+        server='Server to show fixes on',
+        action='Show or hide navigation fixes',
+        fix_type='Type of fixes to show (default: all types)'
+    )
+    @utils.app_has_role('DCS')
+    async def flightplan_fixes(
+        self,
+        interaction: discord.Interaction,
+        server: app_commands.Transform[Server, utils.ServerTransformer],
+        action: Literal['show', 'hide'],
+        fix_type: Optional[Literal['VOR', 'NDB', 'TACAN', 'WYP', 'ALL']] = 'ALL'
+    ):
+        """Show or hide navigation fixes on F10 map for all players."""
+        ephemeral = utils.get_ephemeral(interaction)
+
+        if server.status not in [Status.RUNNING, Status.PAUSED]:
+            # noinspection PyUnresolvedReferences
+            await interaction.response.send_message(
+                _("Server {} is not running.").format(server.display_name),
+                ephemeral=ephemeral
+            )
+            return
+
+        if action == 'hide':
+            # Hide all nav fix markers (send to all players)
+            # This is a broadcast hide - clears all nav fix markers server-wide
+            await server.send_to_dcs({
+                'command': 'hideAllNavFixes'
+            })
+            # noinspection PyUnresolvedReferences
+            await interaction.response.send_message(
+                _("Navigation fixes hidden on {}.").format(server.display_name),
+                ephemeral=ephemeral
+            )
+            return
+
+        # Get theater
+        theater = server.current_mission.map if server.current_mission else None
+        if not theater:
+            # noinspection PyUnresolvedReferences
+            await interaction.response.send_message(
+                _("Cannot determine current map theater."),
+                ephemeral=ephemeral
+            )
+            return
+
+        theater = get_theater_name(theater)
+
+        # Query fixes
+        async with self.apool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                if fix_type and fix_type != 'ALL':
+                    await cursor.execute("""
+                        SELECT identifier, fix_type, position_x, position_z, frequency
+                        FROM flightplan_navigation_fixes
+                        WHERE map_theater = %s AND fix_type = %s
+                        ORDER BY identifier
+                    """, (theater, fix_type))
+                else:
+                    await cursor.execute("""
+                        SELECT identifier, fix_type, position_x, position_z, frequency
+                        FROM flightplan_navigation_fixes
+                        WHERE map_theater = %s
+                        ORDER BY identifier
+                    """, (theater,))
+                fixes = await cursor.fetchall()
+
+        if not fixes:
+            type_msg = f" of type {fix_type}" if fix_type and fix_type != 'ALL' else ""
+            # noinspection PyUnresolvedReferences
+            await interaction.response.send_message(
+                _("No navigation fixes{} found for {}.").format(type_msg, theater),
+                ephemeral=ephemeral
+            )
+            return
+
+        # Filter to only those with coordinates
+        fixes_data = []
+        for fix in fixes:
+            x = fix.get('position_x')
+            z = fix.get('position_z')
+            if x is not None and z is not None:
+                fixes_data.append({
+                    'name': fix['identifier'],
+                    'type': fix['fix_type'],
+                    'x': x,
+                    'z': z,
+                    'frequency': fix.get('frequency')
+                })
+
+        if not fixes_data:
+            # noinspection PyUnresolvedReferences
+            await interaction.response.send_message(
+                _("No navigation fixes with coordinates found for {}.").format(theater),
+                ephemeral=ephemeral
+            )
+            return
+
+        # Send to all coalitions (coalition 0 = ALL)
+        await server.send_to_dcs({
+            'command': 'showNavFixes',
+            'player_ucid': '_ALL_',  # Special marker for "show to everyone"
+            'coalition': 0,  # All coalitions
+            'fixes_json': json.dumps(fixes_data)
+        })
+
+        type_msg = f" {fix_type}" if fix_type and fix_type != 'ALL' else ""
+        # noinspection PyUnresolvedReferences
+        await interaction.response.send_message(
+            _("Showing {}{} navigation fixes on F10 map for {}.").format(
+                len(fixes_data), type_msg, server.display_name
+            ),
+            ephemeral=ephemeral
+        )
+
     @flightplan.command(name='publish', description=_('Publish flight plan to Discord'))
     @app_commands.guild_only()
     @utils.app_has_role('DCS')
