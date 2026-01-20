@@ -249,17 +249,23 @@ local NAV_FIX_COLOR = {0, 0.8, 0, 0.8}  -- R, G, B, A
 --   coalitionNum: 0=ALL, 1=RED, 2=BLUE
 --   fixes_json: JSON array of {name, type, x, z, frequency}
 --   channel: response channel
-function dcsbot.showNavFixes(player_ucid, coalitionNum, fixes_json, channel)
-    env.info('DCSServerBot - FlightPlan: showNavFixes(' .. player_ucid .. ', coalition=' .. tostring(coalitionNum) .. ')')
-    env.info('DCSServerBot - FlightPlan: fixes_json type=' .. type(fixes_json))
-    env.info('DCSServerBot - FlightPlan: fixes_json value=' .. tostring(fixes_json):sub(1, 200))
+function dcsbot.showNavFixes(player_ucid, coalitionNum, fixes_json, channel, batch_num, total_batches)
+    batch_num = batch_num or 1
+    total_batches = total_batches or 1
+    env.info('DCSServerBot - FlightPlan: showNavFixes(' .. player_ucid .. ', batch ' .. batch_num .. '/' .. total_batches .. ')')
 
-    -- Remove any existing markers for this player first
-    dcsbot.hideNavFixesInternal(player_ucid)
+    -- Only clear existing markers on first batch
+    if batch_num == 1 then
+        dcsbot.hideNavFixesInternal(player_ucid)
+        -- Initialize storage for this player
+        dcsbot.navFixMarkers[player_ucid] = {
+            markers = {},
+            coalition = coalitionNum
+        }
+    end
 
     local coal = getCoalition(coalitionNum)
-    env.info('DCSServerBot - FlightPlan: showNavFixes - coal=' .. tostring(coal))
-    local markers = {}
+    local markers = dcsbot.navFixMarkers[player_ucid] and dcsbot.navFixMarkers[player_ucid].markers or {}
 
     -- Parse fixes JSON
     local fixes = {}
@@ -306,16 +312,15 @@ function dcsbot.showNavFixes(player_ucid, coalitionNum, fixes_json, channel)
             end
         end
     end
-    env.info('DCSServerBot - FlightPlan: showNavFixes - created ' .. created .. ' markers')
+    env.info('DCSServerBot - FlightPlan: showNavFixes - created ' .. created .. ' markers (batch ' .. batch_num .. '/' .. total_batches .. ', total now: ' .. #markers .. ')')
 
-    -- Store markers for later removal
-    dcsbot.navFixMarkers[player_ucid] = {
-        markers = markers,
-        coalition = coalitionNum
-    }
+    -- Update markers storage (already initialized on batch 1)
+    if dcsbot.navFixMarkers[player_ucid] then
+        dcsbot.navFixMarkers[player_ucid].markers = markers
+    end
 
-    -- Send confirmation back to bot (only if channel is valid)
-    if channel and channel ~= "-1" then
+    -- Send confirmation back to bot only on last batch (and only if channel is valid)
+    if batch_num == total_batches and channel and channel ~= "-1" then
         local msg = {
             command = "showNavFixes",
             player_ucid = player_ucid,

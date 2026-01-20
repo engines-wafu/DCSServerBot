@@ -756,13 +756,17 @@ class FlightPlanEventListener(EventListener["FlightPlan"]):
         # Send in batches to avoid UDP packet size limits (~65KB max, but ~1500 bytes ideal)
         # Each fix is roughly 100-150 bytes in JSON, so 50 fixes per batch is safe
         BATCH_SIZE = 50
+        total_batches = (len(fixes_data) + BATCH_SIZE - 1) // BATCH_SIZE
         for i in range(0, len(fixes_data), BATCH_SIZE):
             batch = fixes_data[i:i + BATCH_SIZE]
+            batch_num = i // BATCH_SIZE + 1
             await server.send_to_dcs({
                 'command': 'showNavFixes',
                 'player_ucid': player.ucid,
                 'coalition': player.side.value if player.side else 0,
-                'fixes_json': json.dumps(batch)
+                'fixes_json': json.dumps(batch),
+                'batch_num': batch_num,
+                'total_batches': total_batches
             })
 
     async def _hide_player_nav_fixes(self, server: Server, player: Player) -> None:

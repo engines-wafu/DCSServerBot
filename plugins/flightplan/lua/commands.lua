@@ -41,16 +41,17 @@ end
 -- Show navigation fixes on the F10 map
 function dcsbot.showNavFixes(json)
     log.write('DCSServerBot', log.DEBUG, 'FlightPlan: showNavFixes()')
-    log.write('DCSServerBot', log.DEBUG, 'FlightPlan: fixes_json type=' .. type(json.fixes_json))
-    log.write('DCSServerBot', log.DEBUG, 'FlightPlan: fixes_json length=' .. (json.fixes_json and string.len(json.fixes_json) or 0))
     local channel = json.channel or "-1"
     local fixes_str = json.fixes_json or '[]'
+    local batch_num = json.batch_num or 1
+    local total_batches = json.total_batches or 1
     local script = 'dcsbot.showNavFixes(' ..
         utils.basicSerialize(json.player_ucid) .. ', ' ..
         json.coalition .. ', ' ..
         utils.basicSerialize(fixes_str) .. ', ' ..
-        '"' .. channel .. '")'
-    log.write('DCSServerBot', log.DEBUG, 'FlightPlan: script length=' .. string.len(script))
+        '"' .. channel .. '", ' ..
+        batch_num .. ', ' ..
+        total_batches .. ')'
     net.dostring_in('mission', 'a_do_script(' .. utils.basicSerialize(script) .. ')')
 end
 
