@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS flightplan_plans (
     stale_at TIMESTAMP,
     discord_message_id BIGINT,
     coalition INTEGER DEFAULT 0,
-    FOREIGN KEY (player_ucid) REFERENCES players (ucid) ON UPDATE CASCADE ON DELETE CASCADE
+    FOREIGN KEY (player_ucid) REFERENCES players (ucid) ON UPDATE CASCADE ON DELETE CASCADE,
+    FOREIGN KEY (server_name) REFERENCES servers(server_name) ON UPDATE CASCADE ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_flightplan_plans_ucid ON flightplan_plans (player_ucid);
 CREATE INDEX IF NOT EXISTS idx_flightplan_plans_status ON flightplan_plans (status);
