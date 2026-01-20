@@ -251,6 +251,8 @@ local NAV_FIX_COLOR = {0, 0.8, 0, 0.8}  -- R, G, B, A
 --   channel: response channel
 function dcsbot.showNavFixes(player_ucid, coalitionNum, fixes_json, channel)
     env.info('DCSServerBot - FlightPlan: showNavFixes(' .. player_ucid .. ', coalition=' .. tostring(coalitionNum) .. ')')
+    env.info('DCSServerBot - FlightPlan: fixes_json type=' .. type(fixes_json))
+    env.info('DCSServerBot - FlightPlan: fixes_json value=' .. tostring(fixes_json):sub(1, 200))
 
     -- Remove any existing markers for this player first
     dcsbot.hideNavFixesInternal(player_ucid)
@@ -263,6 +265,9 @@ function dcsbot.showNavFixes(player_ucid, coalitionNum, fixes_json, channel)
     local fixes = {}
     if fixes_json and fixes_json ~= "" and fixes_json ~= "[]" then
         fixes = net.json2lua(fixes_json) or {}
+        env.info('DCSServerBot - FlightPlan: net.json2lua returned ' .. type(fixes))
+    else
+        env.info('DCSServerBot - FlightPlan: fixes_json was empty or nil')
     end
     env.info('DCSServerBot - FlightPlan: showNavFixes - parsed ' .. #fixes .. ' fixes')
 
