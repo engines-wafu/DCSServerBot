@@ -111,8 +111,11 @@ class LogisticsEventListener(EventListener["Logistics"]):
                 return
 
             group_id = initiator.get('group', {}).get('id_')
+            self.log.info(f"Logistics: S_EVENT_BIRTH for {player.name} — event group_id={group_id}, player.group_id={player.group_id}, side={player.side.value if player.side else None}")
             if group_id is not None:
                 await self._create_logistics_menu(server, player, group_id=group_id)
+            else:
+                self.log.warning(f"Logistics: S_EVENT_BIRTH for {player.name} — no group_id in event data")
 
         elif event_name == 'S_EVENT_LAND':
             await self._check_delivery_on_landing(server, data)
@@ -174,14 +177,18 @@ class LogisticsEventListener(EventListener["Logistics"]):
             if not player:
                 return
 
-            self.log.info(f"Logistics: Proximity check passed for task {task_id}, completing")
+            self.log.info(f"Logistics: Proximity check passed for task {task_id}, completing for {player.name}")
             result = await self._complete_task(server, player, task_id)
             if result['success']:
+                self.log.info(f"Logistics: Proximity-complete task #{task_id} succeeded for {player.name}, rebuilding menu (side={player.side.value if player.side else None}, group_id={player.group_id})")
                 asyncio.create_task(player.sendChatMessage(f"Delivery confirmed! Task #{task_id} completed."))
                 asyncio.create_task(player.sendPopupMessage(
                     "DELIVERY COMPLETE\n\nTask logged to your record.", 10))
                 # Refresh F10 menu to remove completed task
                 await self._create_logistics_menu(server, player)
+                self.log.info(f"Logistics: Proximity-complete menu rebuild finished for {player.name}")
+            else:
+                self.log.warning(f"Logistics: Proximity-complete task #{task_id} failed for {player.name}: {result.get('error')}")
 
     @event(name="logistics")
     async def onLogisticsCallback(self, server: Server, data: dict) -> None:
@@ -190,10 +197,12 @@ class LogisticsEventListener(EventListener["Logistics"]):
         player_id = data.get('from')
         player = server.get_player(id=player_id)
         if not player:
+            self.log.warning(f"Logistics F10 callback: player_id={player_id} not found on server")
             return
 
         params = data.get('params', {})
         action = params.get('action')
+        self.log.info(f"Logistics F10 callback: {player.name} action={action} params={params} (side={player.side.value if player.side else None}, group_id={player.group_id})")
 
         if action == 'view_tasks':
             await self._menu_view_tasks(server, player)
@@ -605,9 +614,21 @@ class LogisticsEventListener(EventListener["Logistics"]):
                 for row in rows
             ]
             if not tasks:
-                self.log.debug(f"No available tasks for server={server_name}, coalition={coalition}")
+                # Diagnostic: check if tasks exist but for different coalition/server
+                diag = await conn.execute("""
+                    SELECT coalition, server_name, COUNT(*) as cnt
+                    FROM logistics_tasks
+                    WHERE status = 'approved' AND assigned_ucid IS NULL
+                    GROUP BY coalition, server_name
+                """)
+                diag_rows = await diag.fetchall()
+                diag_info = [(row[0], row[1], row[2]) for row in diag_rows]
+                self.log.warning(
+                    f"No available tasks for server={server_name!r}, coalition={coalition}. "
+                    f"All approved unassigned tasks by (coalition, server, count): {diag_info}"
+                )
             else:
-                self.log.debug(f"Found {len(tasks)} available tasks for server={server_name}, coalition={coalition}: {[t['id'] for t in tasks]}")
+                self.log.info(f"Found {len(tasks)} available tasks for server={server_name!r}, coalition={coalition}: {[t['id'] for t in tasks]}")
             return tasks
 
     async def _get_available_tasks_with_positions(self, server_name: str, coalition: int) -> list[dict]:
@@ -676,6 +697,7 @@ class LogisticsEventListener(EventListener["Logistics"]):
             """, (ucid, server_name))
             row = await cursor.fetchone()
             if row:
+                self.log.debug(f"Assigned task for ucid={ucid}, server={server_name!r}: #{row[0]} (status={row[5]})")
                 return {
                     'id': row[0],
                     'cargo_type': row[1],
@@ -685,6 +707,7 @@ class LogisticsEventListener(EventListener["Logistics"]):
                     'status': row[5],
                     'priority': row[6]
                 }
+            self.log.debug(f"No assigned task for ucid={ucid}, server={server_name!r}")
             return None
 
     async def _get_task_by_id(self, task_id: int, server_name: str, coalition: int) -> dict | None:
@@ -1128,12 +1151,16 @@ class LogisticsEventListener(EventListener["Logistics"]):
                 self.log.info(f"Logistics: Auto-completing task {task['id']} for {player.name} at {place_name} (dest: {dest_name})")
                 result = await self._complete_task(server, player, task['id'])
                 if result['success']:
+                    self.log.info(f"Logistics: Auto-complete task #{task['id']} succeeded for {player.name}, rebuilding menu (side={player.side.value if player.side else None}, group_id={player.group_id})")
                     asyncio.create_task(player.sendChatMessage(
                         f"Delivery confirmed at {place_name}! Task #{task['id']} completed."))
                     asyncio.create_task(player.sendPopupMessage(
                         "DELIVERY COMPLETE\n\nTask logged to your record.", 10))
                     # Refresh F10 menu to remove completed task
                     await self._create_logistics_menu(server, player)
+                    self.log.info(f"Logistics: Auto-complete menu rebuild finished for {player.name}")
+                else:
+                    self.log.warning(f"Logistics: Auto-complete task #{task['id']} failed for {player.name}: {result.get('error')}")
                 return
 
         # Fallback: check proximity if we have position data
@@ -1164,18 +1191,24 @@ class LogisticsEventListener(EventListener["Logistics"]):
     async def _create_logistics_menu(self, server: Server, player: Player, group_id: int = None):
         """Create F10 menu for logistics operations."""
         # Use provided group_id or fall back to player object
+        source_group_id = "param" if group_id is not None else "player"
         if group_id is None:
             group_id = player.group_id
         if not group_id:
-            self.log.debug(f"Cannot create logistics menu for {player.name}: no group_id")
+            self.log.warning(f"Logistics menu: Cannot create for {player.name} — no group_id (source={source_group_id}, player.group_id={player.group_id})")
             return
 
         # Build dynamic menu based on available tasks
-        self.log.debug(f"Building logistics menu for {player.name} (ucid={player.ucid}, side={player.side.value if player.side else None})")
-        tasks = await self._get_available_tasks(server.name, player.side.value)
-        tasks_with_pos = await self._get_available_tasks_with_positions(server.name, player.side.value)
+        side_val = player.side.value if player.side else None
+        self.log.info(f"Logistics menu: Building for {player.name} (ucid={player.ucid}, side={side_val}, group_id={group_id} from {source_group_id}, server={server.name})")
+
+        if side_val is None or side_val == 0:
+            self.log.warning(f"Logistics menu: {player.name} has invalid side={side_val}, skipping Accept Task query")
+
+        tasks = await self._get_available_tasks(server.name, side_val) if side_val else []
+        tasks_with_pos = await self._get_available_tasks_with_positions(server.name, side_val) if side_val else []
         assigned_task = await self._get_assigned_task(player.ucid, server.name)
-        self.log.debug(f"Menu build: {len(tasks)} available tasks, {len(tasks_with_pos)} plottable tasks, assigned={assigned_task is not None}")
+        self.log.info(f"Logistics menu: {player.name} — {len(tasks)} available, {len(tasks_with_pos)} plottable, assigned={'#' + str(assigned_task['id']) if assigned_task else 'None'}")
 
         # Build menu structure
         menu = [{
@@ -1208,6 +1241,7 @@ class LogisticsEventListener(EventListener["Logistics"]):
                     }
                 })
             menu[0]["Logistics"].append({"Accept Task": accept_menu})
+            self.log.info(f"Logistics menu: {player.name} — added Accept Task with {len(accept_menu)} options")
         elif tasks and assigned_task:
             # Show disabled menu item explaining why Accept Task is unavailable
             menu[0]["Logistics"].append({
@@ -1216,6 +1250,9 @@ class LogisticsEventListener(EventListener["Logistics"]):
                     "params": {"action": "cannot_accept"}
                 }
             })
+            self.log.info(f"Logistics menu: {player.name} — Accept Task blocked by assigned #{assigned_task['id']}")
+        else:
+            self.log.info(f"Logistics menu: {player.name} — NO Accept Task submenu (tasks={len(tasks)}, assigned={assigned_task is not None})")
 
         # Add plot options if there are tasks with positions
         if tasks_with_pos:
@@ -1280,12 +1317,17 @@ class LogisticsEventListener(EventListener["Logistics"]):
             })
 
         # Send menu to DCS (group_id already validated at start of function)
-        asyncio.create_task(server.send_to_dcs({
-            "command": "createMenu",
-            "playerID": player.id,
-            "groupID": group_id,
-            "menu": menu
-        }))
+        menu_item_count = len(menu[0]["Logistics"])
+        self.log.info(f"Logistics menu: Sending to DCS for {player.name} — playerID={player.id}, groupID={group_id}, {menu_item_count} menu items")
+        try:
+            await server.send_to_dcs({
+                "command": "createMenu",
+                "playerID": player.id,
+                "groupID": group_id,
+                "menu": menu
+            })
+        except Exception as e:
+            self.log.error(f"Logistics menu: FAILED to send createMenu for {player.name}: {e}")
 
     async def _menu_view_tasks(self, server: Server, player: Player):
         """Handle 'View Available Tasks' menu option."""
@@ -1394,13 +1436,17 @@ class LogisticsEventListener(EventListener["Logistics"]):
 
     async def _menu_deliver(self, server: Server, player: Player):
         """Handle 'Mark Delivered' menu option."""
+        self.log.info(f"Logistics F10: {player.name} clicked Mark Delivered (side={player.side.value if player.side else None}, group_id={player.group_id})")
         task = await self._get_assigned_task(player.ucid, server.name)
         if not task:
+            self.log.warning(f"Logistics F10: {player.name} Mark Delivered — no assigned task found (ucid={player.ucid}, server={server.name})")
             asyncio.create_task(player.sendPopupMessage("You have no active task.", 10))
             return
 
+        self.log.info(f"Logistics F10: {player.name} completing task #{task['id']}")
         result = await self._complete_task(server, player, task['id'])
         if result['success']:
+            self.log.info(f"Logistics F10: {player.name} task #{task['id']} completed, rebuilding menu")
             asyncio.create_task(player.sendPopupMessage(
                 f"DELIVERY COMPLETE!\n\n"
                 f"Task #{task['id']} completed.\n"
@@ -1409,7 +1455,9 @@ class LogisticsEventListener(EventListener["Logistics"]):
             ))
             # Refresh menu
             await self._create_logistics_menu(server, player)
+            self.log.info(f"Logistics F10: {player.name} menu rebuild after delivery complete")
         else:
+            self.log.warning(f"Logistics F10: {player.name} task #{task['id']} completion failed: {result['error']}")
             asyncio.create_task(player.sendPopupMessage(f"Cannot complete task:\n{result['error']}", 10))
 
     async def _menu_abandon(self, server: Server, player: Player):
