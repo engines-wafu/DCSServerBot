@@ -432,32 +432,47 @@ All three plugins are now merged into upstream development branch:
 - **Logistics Plugin** - Cargo delivery missions with task acceptance, F10 markers, auto-completion, configurable role permissions
 - **Logbook Plugin** - Pilot records, squadrons, qualifications, awards with ribbon rack images
 
-### Pending PRs
+### Pending PRs (Upstream)
 
 | PR | Description | Status |
 |----|-------------|--------|
-| #129 | Fix: F10 menu createMenu merges instead of replacing | Pending merge |
+| #135 | Logistics: Add remarks field for pilot instructions | Pending review |
+| #136 | Logistics: Add pagination for F10 Accept Task menu | Pending review |
 
-PRs #125-128 have been merged.
+PRs #125-134 have been merged.
 
-### JSW Production Deployment (Day 1 Complete - 2026-01-27)
+### Open Issues (Fork)
+
+| Issue | Description | Status |
+|-------|-------------|--------|
+| #79 | Logistics: F10 menu doesn't refresh when new tasks created | Open |
+| #80 | Logistics: Heliport names not distinguishable in autocomplete | Open |
+| #83 | Logistics/FlightPlan: Auto-complete not triggering at heliports | Open |
+
+Issues #81 (remarks) and #82 (pagination) have been implemented.
+
+### Squadron Migration (On Hold)
+
+Logbook squadron tables migration to shared userstats schema is complete on staging but waiting for SpecialK to add required columns upstream before submitting PR. See `~/.claude/plans/serene-cuddling-comet.md`.
+
+### JSW Production Deployment
 
 Joint Strike Wing (JSW) has successfully deployed the plugins on their multi-server setup.
 
 **Status:**
 - ✅ FlightPlan: Working (filing, activation, auto-complete)
 - ✅ Logistics: Working (task creation, F10 menus, chat commands)
-- ✅ Logbook: Working (stats display, awaiting data migration)
-- ✅ F10 Menus: Both plugins visible after PR #129 fix
+- ✅ Logbook: Working (stats display, squadrons migrated)
+- ✅ F10 Menus: Both plugins visible
 
 **File Locations on JSW Server:**
 - DCSServerBot: `C:\Users\JointStrikeWing\DCSServerBot`
 - Legacy data: `C:\Users\JointStrikeWing\Saved Games\DCS.release_server\Slmod\mayfly.db`
 - Stats JSON: `C:\Users\JointStrikeWing\Saved Games\DCS.release_server\Scripts\combinedStats.json`
 
-### Data Migration (Next Step)
+### Data Migration
 
-After plugin testing is complete, run legacy data migration:
+For legacy data migration from Slmod/DCS-Server-Logbook:
 ```bash
 python plugins/logbook/db/migrate_legacy.py \
   --mayfly-db /path/to/mayfly.db \
