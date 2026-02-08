@@ -875,14 +875,14 @@ class MCPAPI(Plugin):
             else:
                 await command._callback(interaction, **params)
 
-            # Extract response
+            # Extract response - prefer followup messages if any, otherwise use response embeds
             embeds = []
-            for embed in interaction.response.embeds:
-                embeds.append(embed_to_info(embed))
-
-            # Also check followup messages
-            for msg in interaction.followup.messages:
-                for embed in msg.get('embeds', []):
+            if interaction.followup.messages:
+                for msg in interaction.followup.messages:
+                    for embed in msg.get('embeds', []):
+                        embeds.append(embed_to_info(embed))
+            else:
+                for embed in interaction.response.embeds:
                     embeds.append(embed_to_info(embed))
 
             return SlashCommandResponse(
