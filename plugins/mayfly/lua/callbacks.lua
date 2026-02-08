@@ -1,0 +1,2 @@
+-- Mayfly plugin callbacks (stub)
+-- Future: hook into DCS events for automatic flight tracking

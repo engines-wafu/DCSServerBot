@@ -1,0 +1,2 @@
+-- Mayfly plugin commands (stub)
+-- Future: in-game chat commands for signing out/in aircraft
