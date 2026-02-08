@@ -1,0 +1,299 @@
+\documentclass[10pt,a4paper,twocolumn]{article}
+\usepackage[margin=1.8cm]{geometry}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{tabularx}
+\usepackage{multirow}
+
+% Colors
+\definecolor{jswblue}{RGB}{30,60,114}
+\definecolor{jswgrey}{RGB}{90,90,90}
+\definecolor{svcgreen}{RGB}{34,139,34}
+\definecolor{unsvcred}{RGB}{178,34,34}
+\definecolor{gndamber}{RGB}{204,102,0}
+
+% Header/Footer
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textcolor{jswblue}{\textbf{Joint Strike Wing}}}
+\fancyhead[R]{\small\textcolor{jswblue}{Mayfly Plugin Proposal}}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\setlength{\headheight}{14pt}
+
+% Compact section formatting
+\titleformat{\section}{\normalsize\bfseries\color{jswblue}}{\thesection}{0.5em}{}
+\titleformat{\subsection}{\small\bfseries\color{jswblue!80}}{\thesubsection}{0.5em}{}
+\titleformat{\subsubsection}{\small\itshape\color{jswgrey}}{\thesubsubsection}{0.5em}{}
+\titlespacing*{\section}{0pt}{1.5ex plus 0.5ex minus 0.2ex}{0.8ex plus 0.2ex}
+\titlespacing*{\subsection}{0pt}{1ex plus 0.3ex minus 0.1ex}{0.5ex plus 0.1ex}
+
+% Compact lists
+\setlist{nosep,leftmargin=1.5em,topsep=2pt}
+
+% Reduce spacing
+\setlength{\parskip}{0.3ex}
+\setlength{\floatsep}{6pt}
+\setlength{\textfloatsep}{6pt}
+\setlength{\columnsep}{0.8cm}
+
+\begin{document}
+
+% Title block - spans both columns
+\twocolumn[%
+\begin{center}
+{\Large\bfseries\textcolor{jswblue}{Mayfly}}
+
+\vspace{0.15cm}
+{\normalsize Aircraft Management \& MF700 Documentation for DCSServerBot}
+
+\vspace{0.2cm}
+{\footnotesize Author: Engines}
+
+{\footnotesize February 2026 --- Alpha Release}
+\end{center}
+\vspace{0.4cm}
+
+\noindent Mayfly is a new DCSServerBot plugin that brings Royal Navy--style aircraft documentation to DCS World. Named after the Fleet Air Arm's approach to managing individual airframes through their operational lives, it replaces manual spreadsheets and Google Forms with Discord slash commands. Pilots sign out aircraft before a sortie, report defects on return, and engineering staff manage serviceability state---all tracked per--airframe with full audit trails. The system is designed around 892 NAS's existing persistent F-4E Phantom II workflow but is aircraft-type agnostic, supporting any DCS module and any squadron.
+
+\vspace{0.4cm}
+]
+
+%==============================================================================
+\section{Motivation}
+%==============================================================================
+
+892 Naval Air Squadron currently manages persistent F-4E aircraft using a combination of:
+
+\begin{itemize}
+    \item \textbf{Heatblur persistence keys} for aircraft state files
+    \item \textbf{Amazon S3} with a Python sync app for sharing keys between pilots
+    \item \textbf{Google Sheets} for aircraft logbooks (the ``700'')
+    \item \textbf{Google Forms} for after-action reports
+    \item \textbf{Manual staff updates} to reconcile everything after each mission
+\end{itemize}
+
+This process works but is labour-intensive. The WCPO (Watch Chief Petty Officer) must manually cross-reference pilot reports, update the spreadsheet, and communicate aircraft state changes to the squadron. Information lives across multiple platforms with no single source of truth.
+
+Mayfly consolidates this into DCSServerBot, providing a single authoritative system accessible through Discord commands, with automatic event detection for crashes and ejections.
+
+%==============================================================================
+\section{The MF700 System}
+%==============================================================================
+
+The plugin's documentation model is derived from the MOD Form 700 series---the Royal Navy's aircraft maintenance documentation system. While significantly simplified for the simulation context, it preserves the key concepts that make the real system work.
+
+\subsection{F705 --- Flight Servicing Certificate}
+
+The sign-out/sign-in workflow. A pilot reviews the aircraft's state (limitations, deferred faults, open defects), formally accepts the aircraft, flies the sortie, and signs it back to engineering on return. In Mayfly, this is the \texttt{/mayfly signout} and \texttt{/mayfly signin} cycle.
+
+\subsection{F707 --- Aircraft Maintenance Log}
+
+The primary defect recording document. Each defect receives a SNOW (Serial Number of Work)---a consecutive number unique to that airframe. Raising an F707 entry places the aircraft unserviceable. It returns to service when all entries are cleared by authorised personnel. Commands: \texttt{/mayfly report}, \texttt{/mayfly rectify}, \texttt{/mayfly defects}.
+
+\subsection{F704 --- Acceptable Deferred Faults}
+
+Not all defects prevent flight. A qualified engineer can defer a fault, assessing the aircraft as still airworthy despite the issue. Deferrals are categorised:
+
+\begin{itemize}
+    \item \textbf{CAT A}: As specified (specific time limit)
+    \item \textbf{CAT B}: 3 calendar days
+    \item \textbf{CAT C}: 10 calendar days
+\end{itemize}
+
+Command: \texttt{/mayfly defer}.
+
+\subsection{F703 --- Limitations Log}
+
+Operational limitations that do not make an aircraft unserviceable but restrict its use. Examples: ``No night operations'', ``VMC only'', ``Max G limited to 4G''. Pilots review limitations during sign-out to determine if the aircraft is suitable for the planned mission. Commands: \texttt{/mayfly limit}, \texttt{/mayfly unlimit}.
+
+%==============================================================================
+\section{Aircraft Serviceability}
+%==============================================================================
+
+Each aircraft exists in one of three states:
+
+\begin{description}[style=nextline,leftmargin=1em]
+    \item[\textcolor{svcgreen}{Serviceable}] No open defects. Available for tasking.
+    \item[\textcolor{unsvcred}{Unserviceable}] One or more open F707 entries. Cannot fly until defects are rectified or deferred.
+    \item[\textcolor{gndamber}{Grounded}] Engineering hold. Aircraft removed from the line regardless of defect state (e.g.\ structural inspection, modification programme).
+\end{description}
+
+Serviceability is determined automatically from the defect log. When a pilot raises a defect via \texttt{/mayfly report}, the aircraft becomes unserviceable. When engineering clears or defers all open defects, it returns to serviceable.
+
+Crashes and ejections detected by DCSServerBot's event system automatically mark the aircraft unserviceable, close the flight record, and release the pilot assignment.
+
+%==============================================================================
+\section{Commands}
+%==============================================================================
+
+All commands are under the \texttt{/mayfly} group with autocomplete on squadron, aircraft, and defect selection.
+
+\subsection{Pilot Commands}
+
+\begin{description}[style=nextline,leftmargin=0.5em,font=\ttfamily\small]
+    \item[/mayfly board] Fleet status overview---shows all aircraft in a squadron with their current state at a glance.
+    \item[/mayfly check] Detailed status card for a single aircraft: defects, limitations, persistence key, flight hours.
+    \item[/mayfly signout] Sign out an aircraft for a sortie. Locks the aircraft to the pilot.
+    \item[/mayfly signin] Sign the aircraft back in. Record flight hours and any remarks.
+    \item[/mayfly report] Raise a new F707 defect entry against an aircraft.
+    \item[/mayfly defects] View the full F707 defect log for an aircraft.
+\end{description}
+
+\subsection{Engineering Commands}
+
+\begin{description}[style=nextline,leftmargin=0.5em,font=\ttfamily\small]
+    \item[/mayfly rectify] Close a defect---certify the work as complete.
+    \item[/mayfly defer] Defer a defect with a category (CAT A/B/C).
+    \item[/mayfly limit] Add an operational limitation to an aircraft.
+    \item[/mayfly unlimit] Remove a limitation.
+    \item[/mayfly ground] Place an aircraft on engineering hold.
+    \item[/mayfly release] Release a grounded aircraft to the line.
+\end{description}
+
+\subsection{Admin Commands}
+
+\begin{description}[style=nextline,leftmargin=0.5em,font=\ttfamily\small]
+    \item[/mayfly add] Register a new aircraft to a squadron.
+    \item[/mayfly edit] Edit aircraft details (tail number, type, notes, persistence key).
+    \item[/mayfly remove] Write off an aircraft (with reason). Preserves flight records.
+\end{description}
+
+%==============================================================================
+\section{Architecture}
+%==============================================================================
+
+Mayfly is a standard DCSServerBot plugin consisting of:
+
+\begin{itemize}
+    \item \textbf{commands.py} --- 15 slash commands with autocomplete ($\sim$1,100 lines)
+    \item \textbf{listener.py} --- Event listener for crash/eject/pilot death
+    \item \textbf{db/tables.sql} --- 4 PostgreSQL tables with foreign keys to the existing \texttt{squadrons} and \texttt{players} tables
+    \item \textbf{lua/} --- Hook stubs for future in-game integration
+\end{itemize}
+
+\subsection{Database Schema}
+
+\begin{description}[style=nextline,leftmargin=0.5em]
+    \item[mayfly\_aircraft] Tail number, type, status, persistence key, squadron FK, flight hours, livery ID
+    \item[mayfly\_flights] Sortie records linking pilot UCID to aircraft with sign-out/sign-in timestamps
+    \item[mayfly\_defects] F707 entries with SNOW numbering, status, deferral category
+    \item[mayfly\_limitations] F703 entries with active/removed state
+\end{description}
+
+The schema uses cascading deletes from the \texttt{squadrons} table, so removing a squadron cleanly removes all its aircraft, flights, defects, and limitations. Writing off an aircraft preserves it in the database (with timestamp and reason) rather than deleting it.
+
+\subsection{Integration Points}
+
+\begin{itemize}
+    \item \textbf{Userstats plugin} --- Provides the \texttt{squadrons} and \texttt{players} tables that Mayfly references via foreign keys
+    \item \textbf{Logbook plugin} --- Squadron management commands for creating/editing squadrons
+    \item \textbf{MCP API} --- All commands are accessible via the REST API for external tooling
+    \item \textbf{DCS events} --- Crash, ejection, and pilot death events trigger automatic state updates
+\end{itemize}
+
+%==============================================================================
+\section{Persistence \& the S3 Question}
+%==============================================================================
+
+Heatblur's F-4E persistence system is fundamentally \emph{client-side}. The DCS dedicated server does not run module-specific code and cannot access persistence files. This means some form of file synchronisation is required for shared aircraft.
+
+892 NAS currently uses Funky's Python application to sync persistence keys via Amazon S3. The Mayfly plugin manages the \emph{documentation} layer---who has the aircraft, what's wrong with it, how many hours it has flown---while the S3 app handles the \emph{binary state} layer.
+
+Future integration options:
+\begin{enumerate}
+    \item \textbf{DCS GameGUI hook} --- A Lua script on each client that automatically uploads/downloads persistence files, triggered by spawn/despawn events. Invisible to the pilot.
+    \item \textbf{Integrated sync} --- Mayfly could manage S3 operations directly, tying key sync to the sign-out/sign-in workflow.
+    \item \textbf{Manual} --- Pilots continue using the existing S3 app alongside Mayfly commands.
+\end{enumerate}
+
+The plugin is designed to work with or without persistence sync. Non-persistent aircraft types (Mi-8, Gazelle, etc.) benefit from the documentation system without requiring any file synchronisation.
+
+%==============================================================================
+\section{Seed Data}
+%==============================================================================
+
+The alpha deployment includes 9 Fleet Air Arm squadrons seeded with authentic serial numbers from Owen Thetford's \emph{British Naval Aircraft since 1912} (6th edition). Each squadron's aircraft are mapped to the closest available DCS module.
+
+\vspace{0.5em}
+\begin{small}
+\begin{tabularx}{\columnwidth}{@{}lllr@{}}
+\toprule
+\textbf{Squadron} & \textbf{DCS Type} & \textbf{Historical} & \textbf{A/C} \\
+\midrule
+892 NAS & F-4E & Phantom F.G.1 & 6 \\
+800 NAS & AV-8B & Sea Harrier & 6 \\
+801 NAS & AV-8B & Sea Harrier & 6 \\
+815 NAS & OH-58D & Lynx H.A.S.3 & 4 \\
+820 NAS & Mi-8 & Sea King H.A.S.5 & 5 \\
+845 NAS & Mi-8 & Sea King H.C.4 & 5 \\
+846 NAS & Mi-8 & Sea King H.C.4 & 4 \\
+849 NAS & Mi-8 & Sea King A.E.W.2 & 3 \\
+705 NAS & SA342 & Gazelle H.T.2 & 4 \\
+\midrule
+\multicolumn{3}{@{}l}{\textbf{Total}} & \textbf{43} \\
+\bottomrule
+\end{tabularx}
+\end{small}
+
+\vspace{0.5em}
+Serials follow historical allocations. For example, 892 NAS uses the XT-8xx range (the actual Phantom F.G.1 serial block XT857--876), while 800/801 NAS use XZ-4xx and ZA-1xx (Sea Harrier F.R.S.1 blocks XZ450--500 and ZA174--195). Each squadron includes realistic defect and limitation data to demonstrate the documentation workflow.
+
+%==============================================================================
+\section{Testing \& Next Steps}
+%==============================================================================
+
+\subsection{Current Status (Alpha)}
+
+\begin{itemize}
+    \item All 15 commands implemented and tested via API and Discord
+    \item Deployed on the Hover Stop staging server
+    \item Stanton mission loaded with F-4E aircraft
+    \item Event listener installed for crash/eject detection
+\end{itemize}
+
+\subsection{Testing Needed}
+
+\begin{enumerate}
+    \item \textbf{Signout/signin end-to-end} --- Linked pilot signs out an F-4E, flies a sortie on the staging server, signs back in. Verify flight hours are recorded.
+    \item \textbf{Crash event listener} --- Sign out an aircraft, crash deliberately, verify the bot automatically marks it unserviceable and closes the flight record.
+    \item \textbf{Defect workflow} --- Report a defect after flying, verify it appears in the log, rectify it, confirm aircraft returns to serviceable.
+\end{enumerate}
+
+\subsection{Roadmap}
+
+\begin{description}[style=nextline,leftmargin=0.5em]
+    \item[Beta] Integrate S3 persistence sync. Role-based permissions (pilot vs.\ engineering vs.\ admin). Flight hour thresholds for scheduled maintenance triggers.
+    \item[Release] Upstream PR to DCSServerBot. Documentation. Multi-server support. Historical flight log queries and statistics.
+\end{description}
+
+%==============================================================================
+\section{For Beta Testers}
+%==============================================================================
+
+We are looking for testers who can:
+
+\begin{itemize}
+    \item Fly on the Hover Stop staging server with a linked DCS account
+    \item Test the sign-out/sign-in workflow with F-4E aircraft (892 NAS)
+    \item Try other aircraft types (AV-8B, Mi-8, Gazelle, Kiowa)
+    \item Report defects and exercise the engineering workflow
+    \item Provide feedback on the command UX and documentation model
+\end{itemize}
+
+To get started, connect to the Hover Stop Staging Discord server and run \texttt{/mayfly board} to see the fleet. All commands are guild-only and require the DCS role.
+
+\vspace{1em}
+\begin{center}
+\small\textcolor{jswgrey}{Mayfly v0.1 --- DCSServerBot Plugin}
+
+\textcolor{jswgrey}{github.com/engines-wafu/DCSServerBot}
+\end{center}
+
+\end{document}
