@@ -63,29 +63,54 @@ class FleetBoardAircraft(report.EmbedElement):
 
         self.embed.description = " | ".join(summary_parts)
 
-        # Build per-aircraft fields
+        # Build tabular layout
+        # Determine column widths from data
+        tail_w = max(len(ac['tail_number']) for ac in aircraft)
+        tail_w = max(tail_w, 4)  # min width for "TAIL" header
+
+        rows = []
         for ac in aircraft:
             if ac['current_pilot_ucid']:
-                emoji = STATUS_EMOJI.get('signed_out', '\u2753')
+                status_ch = '\u2708'
+            elif ac['status'] == 'serviceable':
+                status_ch = '\u2705'
+            elif ac['status'] == 'unserviceable':
+                status_ch = '\u26a0'
+            elif ac['status'] == 'grounded':
+                status_ch = '\u26d4'
             else:
-                emoji = STATUS_EMOJI.get(ac['status'], '\u2753')
-            name = f"{emoji} {ac['tail_number']}"
+                status_ch = '\u2753'
 
-            lines = [ac['aircraft_type']]
-            if ac['current_pilot_ucid'] and ac['pilot_name']:
-                lines.append(f"Pilot: {ac['pilot_name']}")
-            elif ac['status'] not in ('serviceable',):
-                lines.append(ac['status'].replace('_', ' ').title())
-
-            if ac['open_defects']:
-                lines.append(f"Defects: {ac['open_defects']}")
-            if ac['active_limits']:
-                lines.append(f"Limits: {ac['active_limits']}")
-
+            tail = ac['tail_number']
             hours = float(ac['total_flight_hours']) if ac['total_flight_hours'] else 0
-            lines.append(f"{hours:.1f} hrs")
+            hrs_str = f"{hours:.1f}"
 
-            self.add_field(name=name, value="\n".join(lines), inline=True)
+            # Notes column: pilot name, defects, limitations
+            notes = []
+            if ac['current_pilot_ucid'] and ac['pilot_name']:
+                notes.append(ac['pilot_name'])
+            elif ac['status'] not in ('serviceable', 'signed_out'):
+                notes.append(ac['status'].replace('_', ' ').upper())
+            if ac['open_defects']:
+                notes.append(f"{ac['open_defects']} def")
+            if ac['active_limits']:
+                notes.append(f"{ac['active_limits']} lim")
+            note_str = ", ".join(notes) if notes else ""
+
+            rows.append((status_ch, tail, hrs_str, note_str))
+
+        # Build the table as a code block
+        hrs_w = max(len(r[2]) for r in rows)
+        hrs_w = max(hrs_w, 3)
+
+        lines = []
+        for status_ch, tail, hrs_str, note_str in rows:
+            line = f"{status_ch} {tail:<{tail_w}}  {hrs_str:>{hrs_w}}h"
+            if note_str:
+                line += f"  {note_str}"
+            lines.append(line)
+
+        self.add_field(name="", value="\n".join(lines), inline=False)
 
 
 class FleetBoardFooter(report.EmbedElement):
