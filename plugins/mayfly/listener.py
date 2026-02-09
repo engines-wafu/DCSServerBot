@@ -34,6 +34,8 @@ class MayflyEventListener(EventListener["Mayfly"]):
     @update_fleet_board.before_loop
     async def before_update_fleet_board(self):
         await self.bot.wait_until_ready()
+        # Render boards on first loop iteration
+        self.fleet_dirty = True
 
     def mark_fleet_dirty(self):
         self.fleet_dirty = True
