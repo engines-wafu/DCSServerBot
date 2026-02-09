@@ -1,4 +1,7 @@
-from core import EventListener, Server, Player, event
+import asyncio
+
+from core import EventListener, PersistentReport, Server, Player, event
+from discord.ext import tasks
 from psycopg.rows import dict_row
 from typing import TYPE_CHECKING
 
@@ -8,6 +11,67 @@ if TYPE_CHECKING:
 
 class MayflyEventListener(EventListener["Mayfly"]):
     """Event listener for Mayfly - tracks DCS flight events for aircraft management."""
+
+    def __init__(self, plugin: "Mayfly"):
+        super().__init__(plugin)
+        self.fleet_dirty: bool = False
+        self.update_fleet_board.start()
+
+    async def shutdown(self):
+        self.update_fleet_board.cancel()
+
+    @tasks.loop(seconds=30)
+    async def update_fleet_board(self):
+        if not self.fleet_dirty:
+            return
+        try:
+            await self._render_fleet_boards()
+        except Exception as ex:
+            self.log.exception(ex)
+        finally:
+            self.fleet_dirty = False
+
+    @update_fleet_board.before_loop
+    async def before_update_fleet_board(self):
+        await self.bot.wait_until_ready()
+
+    def mark_fleet_dirty(self):
+        self.fleet_dirty = True
+
+    async def _render_fleet_boards(self):
+        config = self.get_config()
+        channel_id = config.get('fleet_channel')
+        if not channel_id:
+            return
+
+        channel_id = int(channel_id)
+
+        # Get all squadrons that have mayfly aircraft
+        async with self.apool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute("""
+                    SELECT DISTINCT s.id, s.name
+                    FROM squadrons s
+                    JOIN mayfly_aircraft a ON a.squadron_id = s.id
+                    WHERE a.written_off_at IS NULL
+                    ORDER BY s.name
+                """)
+                squadrons = await cursor.fetchall()
+
+        for sq in squadrons:
+            try:
+                report = PersistentReport(
+                    self.bot, self.plugin_name, 'fleet_board.json',
+                    embed_name=f"mayfly_sq_{sq['id']}",
+                    channel_id=channel_id
+                )
+                await report.render(squadron_name=sq['name'], squadron_id=sq['id'])
+            except Exception as ex:
+                self.log.error(f"Failed to render fleet board for {sq['name']}: {ex}")
+
+    @event(name="registerDCSServer")
+    async def registerDCSServer(self, server: Server, data: dict) -> None:
+        asyncio.create_task(self._render_fleet_boards())
 
     @event(name="onPlayerStart")
     async def on_player_start(self, server: Server, data: dict) -> None:
@@ -83,3 +147,5 @@ class MayflyEventListener(EventListener["Mayfly"]):
                     f"Mayfly: {ac['tail_number']} marked unserviceable "
                     f"after {event_name} by {ucid}"
                 )
+
+        self.mark_fleet_dirty()

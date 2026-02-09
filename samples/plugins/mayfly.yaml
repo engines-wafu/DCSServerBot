@@ -1,0 +1,4 @@
+DEFAULT:
+  # fleet_channel: 123456789    # Discord channel ID for persistent fleet status boards
+  # api_prefix: /mayfly         # REST API prefix (default: /mayfly)
+  # api_key: your-secret-key    # Optional API key for REST endpoint authentication

@@ -18,7 +18,7 @@ local log       = log
 -- Configuration
 local CONFIG = {
     -- Bot API base URL - set this to your DCSServerBot address and port
-    api_base    = "http://YOUR_SERVER_IP:9876/mcp/mayfly",
+    api_base    = "http://YOUR_SERVER_IP:9876/mayfly",
     -- Timeout for HTTP requests in seconds
     timeout     = 10,
     -- Enable debug logging

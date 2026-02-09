@@ -7,6 +7,7 @@ limitations (F703), deferrals (F704), and optional F-4E persistence file synchro
 ## Features
 
 - **Fleet Status Board**: Squadron-level aircraft status display with serviceability at a glance
+- **Persistent Fleet Channel**: Auto-updating Discord embeds for each squadron, refreshed on every status change
 - **Aircraft Cards**: Detailed individual aircraft status including flight history, defects, and limitations
 - **Sortie Tracking**: Sign out/sign in workflow with departure/arrival, flight hours, and sortie results
 - **Defect Management**: F707-style Serial Number of Work (SNOW) entries with rectification and deferral
@@ -18,7 +19,7 @@ limitations (F703), deferrals (F704), and optional F-4E persistence file synchro
 ## Requirements
 
 - **userstats plugin** must be enabled (provides the shared `squadrons` table)
-- **mcpapi plugin** required for persistence sync REST endpoints
+- **WebService** must be configured (`config/services/webservice.yaml`) for persistence sync REST endpoints (optional -- Discord commands work without it)
 
 ## Installation
 
@@ -98,19 +99,19 @@ For aircraft types that support DCS persistence (currently the F-4E Phantom), Ma
 2. Launch DCS once - it creates `Saved Games\DCS\Config\MayflyCacheSync.lua`
 3. Edit the config file and set `api_base` to your DCSServerBot server address:
    ```lua
-   api_base = "http://YOUR_SERVER_IP:9876/mcp/mayfly"
+   api_base = "http://YOUR_SERVER_IP:9876/mayfly"
    ```
 4. Restart DCS - sync is automatic from this point
 
 ### REST API Endpoints
 
-The persistence sync uses three endpoints (provided by the mcpapi plugin):
+The persistence sync uses three endpoints registered directly by the Mayfly plugin:
 
-| Method | Endpoint                          | Description                                      |
-|--------|-----------------------------------|--------------------------------------------------|
-| GET    | `/mcp/mayfly/cache`               | List all aircraft with persistence keys and status |
-| GET    | `/mcp/mayfly/cache/{key}`         | Download a `.cache` file by persistence key      |
-| PUT    | `/mcp/mayfly/cache/{key}`         | Upload a `.cache` file (max 10MB)                |
+| Method | Endpoint                      | Description                                      |
+|--------|-------------------------------|--------------------------------------------------|
+| GET    | `/mayfly/cache`               | List all aircraft with persistence keys and status |
+| GET    | `/mayfly/cache/{key}`         | Download a `.cache` file by persistence key      |
+| PUT    | `/mayfly/cache/{key}`         | Upload a `.cache` file (max 10MB)                |
 
 ### Persistence Key Setup
 
@@ -124,6 +125,25 @@ in the mission `.miz` file. Set this when registering an aircraft:
 > [!NOTE]
 > The persistence key format depends on the mission editor. For the JSW Stanton mission, keys follow the pattern
 > `{serial}_{modex}_{counter}` (e.g. `XT859_001_1`). Check your `.miz` file to find the exact keys.
+
+## Persistent Fleet Status Channel
+
+Mayfly can maintain auto-updating fleet status embeds in a dedicated Discord channel. Each squadron gets its own
+persistent message that updates automatically when aircraft status changes (signout, signin, crash, defect, etc.).
+
+### Configuration
+
+Add `fleet_channel` to your `config/plugins/mayfly.yaml`:
+
+```yaml
+DEFAULT:
+  fleet_channel: 123456789    # Discord channel ID for fleet status boards
+```
+
+When `fleet_channel` is not set, this feature is disabled. Set the channel to read-only for members so only the
+bot can post.
+
+Updates are coalesced -- multiple rapid changes result in a single Discord edit every 30 seconds to avoid rate limiting.
 
 ## Database Schema
 

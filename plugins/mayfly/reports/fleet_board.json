@@ -1,0 +1,15 @@
+{
+  "color": "blue",
+  "elements":
+  [
+    {
+      "class": "plugins.mayfly.fleet_status.FleetBoardInit"
+    },
+    {
+      "class": "plugins.mayfly.fleet_status.FleetBoardAircraft"
+    },
+    {
+      "class": "plugins.mayfly.fleet_status.FleetBoardFooter"
+    }
+  ]
+}

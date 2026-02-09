@@ -1,11 +1,16 @@
+import asyncio
 import discord
 import logging
 
-from core import Plugin, PluginRequiredError, utils, Group
+from core import Plugin, PluginRequiredError, utils, Group, DEFAULT_TAG, ServiceRegistry
 from datetime import datetime, timezone
 from discord import app_commands
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from fastapi.responses import Response
+from fastapi.security import APIKeyHeader
 from psycopg.rows import dict_row
 from services.bot import DCSServerBot
+from services.webservice import WebService
 from typing import Literal, Optional
 
 from .listener import MayflyEventListener
@@ -166,6 +171,83 @@ def status_display(status: str) -> str:
 
 class Mayfly(Plugin[MayflyEventListener]):
     """Aircraft management & MF700 documentation plugin."""
+
+    def __init__(self, bot, listener):
+        super().__init__(bot, listener)
+        self.web_service: WebService | None = None
+        self.app: FastAPI | None = None
+        self.router: APIRouter | None = None
+
+    async def cog_load(self) -> None:
+        await super().cog_load()
+        asyncio.create_task(self.init_webservice())
+
+    async def cog_unload(self) -> None:
+        if self.app and self.router:
+            for route in self.router.routes:
+                if route in self.app.routes:
+                    self.app.routes.remove(route)
+        await super().cog_unload()
+
+    async def init_webservice(self):
+        for i in range(0, 10):
+            self.web_service = ServiceRegistry.get(WebService)
+            if self.web_service and self.web_service.is_running():
+                break
+            await asyncio.sleep(1)
+        else:
+            self.log.warning(f"  - {self.__cog_name__}: WebService not running, REST endpoints disabled.")
+            return
+        self.app = self.web_service.app
+        if self.app:
+            self.register_routes()
+        else:
+            self.log.warning(f"  - {self.__cog_name__}: WebService app not available.")
+
+    def register_routes(self):
+        config = self.locals.get(DEFAULT_TAG, {})
+        prefix = config.get('api_prefix', '/mayfly')
+        if prefix and not prefix.startswith('/'):
+            prefix = '/' + prefix
+        api_key = config.get('api_key')
+
+        if api_key:
+            api_key_header = APIKeyHeader(name="X-API-Key")
+
+            def get_api_key(api_key_in_header: str = Depends(api_key_header)):
+                if api_key_in_header != str(api_key):
+                    raise HTTPException(status_code=403, detail="Invalid API Key")
+
+            dependencies = [Depends(get_api_key)]
+        else:
+            dependencies = None
+
+        self.router = APIRouter(prefix=prefix, dependencies=dependencies)
+
+        self.router.add_api_route(
+            "/cache", self.mayfly_cache_list,
+            methods=["GET"],
+            description="List all aircraft with persistence keys and their data timestamps.",
+            summary="List Cache Files",
+            tags=["Mayfly Persistence"]
+        )
+        self.router.add_api_route(
+            "/cache/{persistence_key:path}", self.mayfly_cache_get,
+            methods=["GET"],
+            description="Download a persistence .cache file for an aircraft.",
+            summary="Get Cache File",
+            tags=["Mayfly Persistence"]
+        )
+        self.router.add_api_route(
+            "/cache/{persistence_key:path}", self.mayfly_cache_put,
+            methods=["PUT"],
+            description="Upload a persistence .cache file for an aircraft.",
+            summary="Put Cache File",
+            tags=["Mayfly Persistence"]
+        )
+
+        self.app.include_router(self.router)
+        self.log.info(f"  - {self.__cog_name__}: Registered REST endpoints at {prefix}")
 
     mayfly = Group(name="mayfly", description="Aircraft management & MF700 documentation")
 
@@ -455,6 +537,7 @@ class Mayfly(Plugin[MayflyEventListener]):
         embed.set_footer(text="Sign in with /mayfly signin when complete")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
+        self.eventlistener.mark_fleet_dirty()
 
     # ==================== /mayfly signin ====================
 
@@ -545,6 +628,7 @@ class Mayfly(Plugin[MayflyEventListener]):
             )
 
         await interaction.followup.send(embed=embed, ephemeral=True)
+        self.eventlistener.mark_fleet_dirty()
 
     # ==================== /mayfly report ====================
 
@@ -616,6 +700,7 @@ class Mayfly(Plugin[MayflyEventListener]):
         embed.add_field(name="Description", value=description, inline=False)
 
         await interaction.followup.send(embed=embed, ephemeral=True)
+        self.eventlistener.mark_fleet_dirty()
 
     # ==================== /mayfly defects ====================
 
@@ -730,6 +815,7 @@ class Mayfly(Plugin[MayflyEventListener]):
         embed.add_field(name="Rectified By", value=interaction.user.display_name, inline=True)
 
         await interaction.followup.send(embed=embed, ephemeral=True)
+        self.eventlistener.mark_fleet_dirty()
 
     # ==================== /mayfly defer ====================
 
@@ -780,6 +866,7 @@ class Mayfly(Plugin[MayflyEventListener]):
         embed.add_field(name="Category", value=category, inline=True)
 
         await interaction.followup.send(embed=embed, ephemeral=True)
+        self.eventlistener.mark_fleet_dirty()
 
     # ==================== /mayfly limit ====================
 
@@ -830,6 +917,7 @@ class Mayfly(Plugin[MayflyEventListener]):
         embed.add_field(name="Added By", value=interaction.user.display_name, inline=True)
 
         await interaction.followup.send(embed=embed, ephemeral=True)
+        self.eventlistener.mark_fleet_dirty()
 
     # ==================== /mayfly unlimit ====================
 
@@ -869,6 +957,7 @@ class Mayfly(Plugin[MayflyEventListener]):
             color=discord.Color.green()
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
+        self.eventlistener.mark_fleet_dirty()
 
     # ==================== /mayfly ground ====================
 
@@ -900,6 +989,7 @@ class Mayfly(Plugin[MayflyEventListener]):
         if reason:
             msg += f"\nReason: {reason}"
         await interaction.followup.send(msg, ephemeral=True)
+        self.eventlistener.mark_fleet_dirty()
 
     # ==================== /mayfly release ====================
 
@@ -944,6 +1034,7 @@ class Mayfly(Plugin[MayflyEventListener]):
         if warnings:
             msg += "\n\u26a0\ufe0f " + ", ".join(warnings)
         await interaction.followup.send(msg, ephemeral=True)
+        self.eventlistener.mark_fleet_dirty()
 
     # ==================== /mayfly add ====================
 
@@ -1006,6 +1097,7 @@ class Mayfly(Plugin[MayflyEventListener]):
             embed.add_field(name="Livery", value=livery_id, inline=True)
 
         await interaction.followup.send(embed=embed, ephemeral=True)
+        self.eventlistener.mark_fleet_dirty()
 
     # ==================== /mayfly remove ====================
 
@@ -1056,6 +1148,7 @@ class Mayfly(Plugin[MayflyEventListener]):
         if reason:
             msg += f"\nReason: {reason}"
         await interaction.followup.send(msg, ephemeral=True)
+        self.eventlistener.mark_fleet_dirty()
 
     # ==================== /mayfly edit ====================
 
@@ -1124,6 +1217,111 @@ class Mayfly(Plugin[MayflyEventListener]):
         await interaction.followup.send(
             f"\u2705 **{ac['tail_number']}** updated successfully.", ephemeral=True
         )
+        self.eventlistener.mark_fleet_dirty()
+
+    # ==================== REST API ENDPOINTS ====================
+
+    async def mayfly_cache_list(self) -> list[dict]:
+        """List all aircraft that have persistence keys."""
+        async with self.apool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute("""
+                    SELECT a.id, a.tail_number, a.aircraft_type, a.persistence_key,
+                           a.persistence_updated_at, s.name AS squadron
+                    FROM mayfly_aircraft a
+                    JOIN squadrons s ON s.id = a.squadron_id
+                    WHERE a.persistence_key IS NOT NULL
+                      AND a.written_off_at IS NULL
+                    ORDER BY s.name, a.tail_number
+                """)
+                rows = await cursor.fetchall()
+                return [
+                    {
+                        "id": r["id"],
+                        "tail_number": r["tail_number"],
+                        "aircraft_type": r["aircraft_type"],
+                        "persistence_key": r["persistence_key"],
+                        "has_data": r["persistence_updated_at"] is not None,
+                        "updated_at": r["persistence_updated_at"].isoformat() if r["persistence_updated_at"] else None,
+                        "squadron": r["squadron"]
+                    }
+                    for r in rows
+                ]
+
+    async def mayfly_cache_get(self, persistence_key: str):
+        """Download a .cache file by persistence key."""
+        async with self.apool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute("""
+                    SELECT persistence_data, persistence_key
+                    FROM mayfly_aircraft
+                    WHERE persistence_key = %s
+                      AND written_off_at IS NULL
+                """, (persistence_key,))
+                row = await cursor.fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail=f"No aircraft with persistence key '{persistence_key}'")
+        if not row["persistence_data"]:
+            raise HTTPException(status_code=404, detail=f"No cache data stored for '{persistence_key}'")
+
+        return Response(
+            content=bytes(row["persistence_data"]),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{persistence_key}.cache"'
+            }
+        )
+
+    async def mayfly_cache_put(self, persistence_key: str, request: Request):
+        """Upload a .cache file by persistence key."""
+        body = await request.body()
+        if not body:
+            raise HTTPException(status_code=400, detail="Empty request body")
+        if len(body) > 10 * 1024 * 1024:  # 10MB safety limit
+            raise HTTPException(status_code=413, detail="File too large (max 10MB)")
+
+        ucid = request.headers.get("X-Pilot-UCID") or None
+        source = request.headers.get("X-Source", "hook")
+
+        # Validate UCID exists in players table if provided
+        async with self.apool.connection() as conn:
+            if ucid:
+                async with conn.cursor(row_factory=dict_row) as cursor:
+                    await cursor.execute("SELECT ucid FROM players WHERE ucid = %s", (ucid,))
+                    if not await cursor.fetchone():
+                        ucid = None  # Unknown UCID, store as NULL
+
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute("""
+                    SELECT id FROM mayfly_aircraft
+                    WHERE persistence_key = %s AND written_off_at IS NULL
+                """, (persistence_key,))
+                row = await cursor.fetchone()
+
+            if not row:
+                raise HTTPException(status_code=404, detail=f"No aircraft with persistence key '{persistence_key}'")
+
+            aircraft_id = row["id"]
+
+            # Save to history before overwriting
+            await conn.execute("""
+                INSERT INTO mayfly_persistence_history
+                    (aircraft_id, persistence_data, uploaded_by_ucid, source, notes)
+                SELECT id, persistence_data, %s, %s, 'pre-overwrite snapshot'
+                FROM mayfly_aircraft
+                WHERE id = %s AND persistence_data IS NOT NULL
+            """, (ucid, source, aircraft_id))
+
+            # Update current persistence data
+            await conn.execute("""
+                UPDATE mayfly_aircraft
+                SET persistence_data = %s,
+                    persistence_updated_at = NOW() AT TIME ZONE 'utc'
+                WHERE id = %s
+            """, (body, aircraft_id))
+
+        return {"status": "ok", "persistence_key": persistence_key, "size": len(body)}
 
 
 async def setup(bot: DCSServerBot):
