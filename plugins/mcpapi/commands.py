@@ -990,10 +990,17 @@ class MCPAPI(Plugin):
         if len(body) > 10 * 1024 * 1024:  # 10MB safety limit
             raise HTTPException(status_code=413, detail="File too large (max 10MB)")
 
-        ucid = request.headers.get("X-Pilot-UCID")
+        ucid = request.headers.get("X-Pilot-UCID") or None
         source = request.headers.get("X-Source", "hook")
 
+        # Validate UCID exists in players table if provided
         async with self.apool.connection() as conn:
+            if ucid:
+                async with conn.cursor(row_factory=dict_row) as cursor:
+                    await cursor.execute("SELECT ucid FROM players WHERE ucid = %s", (ucid,))
+                    if not await cursor.fetchone():
+                        ucid = None  # Unknown UCID, store as NULL
+
             async with conn.cursor(row_factory=dict_row) as cursor:
                 await cursor.execute("""
                     SELECT id FROM mayfly_aircraft
