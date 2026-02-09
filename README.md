@@ -87,6 +87,7 @@ from time to time, but you as a community member can also create your own plugin
 | Logbook       | Pilot logbook with squadrons, qualifications, awards, and ribbon rack images.                   |   yes    | Userstats                             | [README](./plugins/logbook/README.md)       |
 | Logistics     | Cargo delivery missions with F10 map markers and in-game task management.                       |   yes    | MissionStats                          | [README](./plugins/logistics/README.md)     |
 | LotAtc        | Upload LotAtc Transponder files to your servers.                                                |   yes    |                                       | [README](./plugins/lotatc/README.md)        |
+| Mayfly        | Aircraft management & MF700 documentation with F-4E persistence sync.                          |   yes    | Userstats                             | [README](./plugins/mayfly/README.md)        |
 | MOTD          | Message for players on join or when they jump in a module.                                      |   yes    | Mission, MissionStats                 | [README](./plugins/motd/README.md)          |
 | Music         | Upload and play music over SRS.                                                                 |   yes    |                                       | [README](./plugins/music/README.md)         |
 | ModManager    | Install or update mods into your DCS server.                                                    |   yes    |                                       | [README](./plugins/modmanager/README.md)    |
