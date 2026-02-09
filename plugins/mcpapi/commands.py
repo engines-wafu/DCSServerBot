@@ -9,7 +9,8 @@ from collections import deque
 from core import Plugin, DEFAULT_TAG, Status, ServiceRegistry, PluginInstallationError, Server, Coalition
 from datetime import datetime, timezone
 from discord import app_commands
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, Body
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, Body, Request
+from fastapi.responses import Response
 from fastapi.security import APIKeyHeader
 from psycopg.rows import dict_row
 from services.bot import DCSServerBot
@@ -353,6 +354,29 @@ class MCPAPI(Plugin):
             description="Execute a slash command and return the response.",
             summary="Execute Command",
             tags=["Slash Commands"]
+        )
+
+        # Mayfly Persistence Routes
+        self.router.add_api_route(
+            "/mayfly/cache/{persistence_key:path}", self.mayfly_cache_get,
+            methods=["GET"],
+            description="Download a persistence .cache file for an aircraft.",
+            summary="Get Cache File",
+            tags=["Mayfly Persistence"]
+        )
+        self.router.add_api_route(
+            "/mayfly/cache/{persistence_key:path}", self.mayfly_cache_put,
+            methods=["PUT"],
+            description="Upload a persistence .cache file for an aircraft.",
+            summary="Put Cache File",
+            tags=["Mayfly Persistence"]
+        )
+        self.router.add_api_route(
+            "/mayfly/cache", self.mayfly_cache_list,
+            methods=["GET"],
+            description="List all aircraft with persistence keys and their data timestamps.",
+            summary="List Cache Files",
+            tags=["Mayfly Persistence"]
         )
 
         self.app.include_router(self.router)
@@ -902,6 +926,104 @@ class MCPAPI(Plugin):
                 embeds=[],
                 error=str(e)
             )
+
+
+    # Mayfly Persistence Endpoints
+
+    async def mayfly_cache_list(self) -> list[dict]:
+        """List all aircraft that have persistence keys."""
+        async with self.apool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute("""
+                    SELECT a.id, a.tail_number, a.aircraft_type, a.persistence_key,
+                           a.persistence_updated_at, s.name AS squadron
+                    FROM mayfly_aircraft a
+                    JOIN squadrons s ON s.id = a.squadron_id
+                    WHERE a.persistence_key IS NOT NULL
+                      AND a.written_off_at IS NULL
+                    ORDER BY s.name, a.tail_number
+                """)
+                rows = await cursor.fetchall()
+                return [
+                    {
+                        "id": r["id"],
+                        "tail_number": r["tail_number"],
+                        "aircraft_type": r["aircraft_type"],
+                        "persistence_key": r["persistence_key"],
+                        "has_data": r["persistence_updated_at"] is not None,
+                        "updated_at": r["persistence_updated_at"].isoformat() if r["persistence_updated_at"] else None,
+                        "squadron": r["squadron"]
+                    }
+                    for r in rows
+                ]
+
+    async def mayfly_cache_get(self, persistence_key: str):
+        """Download a .cache file by persistence key."""
+        async with self.apool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute("""
+                    SELECT persistence_data, persistence_key
+                    FROM mayfly_aircraft
+                    WHERE persistence_key = %s
+                      AND written_off_at IS NULL
+                """, (persistence_key,))
+                row = await cursor.fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail=f"No aircraft with persistence key '{persistence_key}'")
+        if not row["persistence_data"]:
+            raise HTTPException(status_code=404, detail=f"No cache data stored for '{persistence_key}'")
+
+        return Response(
+            content=bytes(row["persistence_data"]),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{persistence_key}.cache"'
+            }
+        )
+
+    async def mayfly_cache_put(self, persistence_key: str, request: Request):
+        """Upload a .cache file by persistence key."""
+        body = await request.body()
+        if not body:
+            raise HTTPException(status_code=400, detail="Empty request body")
+        if len(body) > 10 * 1024 * 1024:  # 10MB safety limit
+            raise HTTPException(status_code=413, detail="File too large (max 10MB)")
+
+        ucid = request.headers.get("X-Pilot-UCID")
+        source = request.headers.get("X-Source", "hook")
+
+        async with self.apool.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute("""
+                    SELECT id FROM mayfly_aircraft
+                    WHERE persistence_key = %s AND written_off_at IS NULL
+                """, (persistence_key,))
+                row = await cursor.fetchone()
+
+            if not row:
+                raise HTTPException(status_code=404, detail=f"No aircraft with persistence key '{persistence_key}'")
+
+            aircraft_id = row["id"]
+
+            # Save to history before overwriting
+            await conn.execute("""
+                INSERT INTO mayfly_persistence_history
+                    (aircraft_id, persistence_data, uploaded_by_ucid, source, notes)
+                SELECT id, persistence_data, %s, %s, 'pre-overwrite snapshot'
+                FROM mayfly_aircraft
+                WHERE id = %s AND persistence_data IS NOT NULL
+            """, (ucid, source, aircraft_id))
+
+            # Update current persistence data
+            await conn.execute("""
+                UPDATE mayfly_aircraft
+                SET persistence_data = %s,
+                    persistence_updated_at = NOW() AT TIME ZONE 'utc'
+                WHERE id = %s
+            """, (body, aircraft_id))
+
+        return {"status": "ok", "persistence_key": persistence_key, "size": len(body)}
 
 
 async def setup(bot: DCSServerBot):

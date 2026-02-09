@@ -206,14 +206,16 @@ Heatblur's F-4E persistence system is fundamentally \emph{client-side}. The DCS 
 
 892 NAS currently uses Funky's Python application to sync persistence keys via Amazon S3. The Mayfly plugin manages the \emph{documentation} layer---who has the aircraft, what's wrong with it, how many hours it has flown---while the S3 app handles the \emph{binary state} layer.
 
-Future integration options:
+The planned approach replaces S3 with a DCS client hook script and PostgreSQL storage:
+
 \begin{enumerate}
-    \item \textbf{DCS GameGUI hook} --- A Lua script on each client that automatically uploads/downloads persistence files, triggered by spawn/despawn events. Invisible to the pilot.
-    \item \textbf{Integrated sync} --- Mayfly could manage S3 operations directly, tying key sync to the sign-out/sign-in workflow.
-    \item \textbf{Manual} --- Pilots continue using the existing S3 app alongside Mayfly commands.
+    \item \textbf{Storage:} Persistence files (\textasciitilde{}2\,MB each) stored in the bot's PostgreSQL database, eliminating the need for AWS S3, credentials, or a standalone sync app.
+    \item \textbf{Pre-seed on connect:} A Lua script in the pilot's \texttt{Scripts/Hooks/} folder (one-time install, like SRS) downloads \emph{all} squadron cache files when the pilot connects to the server. Files are in place before anyone slots in.
+    \item \textbf{Upload on deslot:} When the pilot unslots or disconnects, the hook uploads \emph{only} the flown aircraft's updated cache file back to the bot API.
+    \item \textbf{Invisible to pilots:} No app to open, no buttons to click. Persistence sync is fully automatic.
 \end{enumerate}
 
-The plugin is designed to work with or without persistence sync. Non-persistent aircraft types (Mi-8, Gazelle, etc.) benefit from the documentation system without requiring any file synchronisation.
+Non-persistent aircraft types (Mi-8, Gazelle, etc.) benefit from the documentation system without requiring any file synchronisation.
 
 %==============================================================================
 \section{Seed Data}
@@ -269,7 +271,7 @@ Serials follow historical allocations. For example, 892 NAS uses the XT-8xx rang
 \subsection{Roadmap}
 
 \begin{description}[style=nextline,leftmargin=0.5em]
-    \item[Beta] Integrate S3 persistence sync. Role-based permissions (pilot vs.\ engineering vs.\ admin). Flight hour thresholds for scheduled maintenance triggers.
+    \item[Beta] Client hook for automated persistence sync. PostgreSQL binary storage with version history. Role-based permissions (pilot vs.\ engineering vs.\ admin). Flight hour thresholds for scheduled maintenance triggers.
     \item[Release] Upstream PR to DCSServerBot. Documentation. Multi-server support. Historical flight log queries and statistics.
 \end{description}
 
