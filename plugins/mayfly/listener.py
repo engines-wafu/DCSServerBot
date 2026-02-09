@@ -24,8 +24,10 @@ class MayflyEventListener(EventListener["Mayfly"]):
     async def update_fleet_board(self):
         if not self.fleet_dirty:
             return
+        self.log.debug("Fleet board update triggered")
         try:
             await self._render_fleet_boards()
+            self.log.debug("Fleet board update complete")
         except Exception as ex:
             self.log.exception(ex)
         finally:
@@ -34,6 +36,7 @@ class MayflyEventListener(EventListener["Mayfly"]):
     @update_fleet_board.before_loop
     async def before_update_fleet_board(self):
         await self.bot.wait_until_ready()
+        self.log.info("Fleet board loop ready, scheduling initial render")
         # Render boards on first loop iteration
         self.fleet_dirty = True
 
